@@ -14,7 +14,7 @@ import com.service.web.app.models.entity.Relations;
 @Service
 public class ExtractionRelImpl implements Extractor {
 
-    private final String CORENLP_URL = "http://localhost:9000";
+    private final String CORENLP_URL = "https://corenlp-server.loca.lt";
     private final RestTemplate restTemplate = new RestTemplate();
 
     public List<Relations> extractTriples(List<String> textDoc) {
