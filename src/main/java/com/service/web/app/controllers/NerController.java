@@ -35,12 +35,16 @@ public class NerController {
 	private GraphKnow graph;
 
 	@PostMapping("/relations")
-	public ResponseEntity<List<Relations>> extract(@RequestBody List<String> doc) {
-		List<Relations> rel = null;
+	public ResponseEntity<String> extract(@RequestBody List<String> doc) {
+		// List<Relations> rel = null;
+		String rel = null;
 		if (doc.size() > 0) {
-			rel = extract.extractTriples(doc);
-			if (rel == null) {
-				return ResponseEntity.badRequest().body(rel);
+			// Recibir del front solo los textos de cada disurso
+			for (String docu : doc) {
+				rel = extract.extractTriples(docu);
+				if (rel == null) {
+					return ResponseEntity.badRequest().body(rel);
+				}
 			}
 
 			System.out.println("TERMINO RELATIONS");
