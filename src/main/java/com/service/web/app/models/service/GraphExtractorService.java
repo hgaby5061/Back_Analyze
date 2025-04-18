@@ -2,10 +2,8 @@ package com.service.web.app.models.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
-import com.service.web.app.models.entity.GraphEdge;
 import com.service.web.app.models.entity.GraphNode;
-import com.service.web.app.models.entity.Relations;
-
+import com.service.web.app.models.entity.GraphEdge;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -13,122 +11,211 @@ import org.springframework.web.client.RestTemplate;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class GraphExtractorService implements Extractor {
 
     private final String CORENLP_URL = "http://localhost:9000";
     private final RestTemplate restTemplate = new RestTemplate();
+    private int nodeIdCounter = 1;
 
     @Override
     public String extractTriples(String inputText) {
         try {
-            // Propiedades para análisis en español
-            String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,ner,depparse,kbp,natlog,openie\"," +
-                    "\"tokenize.language\":\"es\"," +
-                    "\"outputFormat\":\"json\"}";
-            String encodedProps = URLEncoder.encode(properties, StandardCharsets.UTF_8);
-            String url = CORENLP_URL + "/?properties=" + encodedProps;
+            Map<String, Object> parsedJson = fetchFromCoreNLP(inputText);
+            System.out.println(parsedJson);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.parseMediaType("application/text-plain; charset=UTF-8"));
-            HttpEntity<String> request = new HttpEntity<>(inputText, headers);
+            Map<String, GraphNode> nodes = new LinkedHashMap<>();
+            List<GraphEdge> edges = new ArrayList<>();
+            Map<String, Integer> degreeMap = new HashMap<>();
+            Map<String, String> textToNodeId = new HashMap<>();
+            Map<String, String> flatGroups = groupFlatDependencies(parsedJson);
 
-            ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
-            String responseBody = response.getBody();
+            extractEntities(parsedJson, nodes, textToNodeId, flatGroups);
+            extractRelations(parsedJson, nodes, edges, degreeMap, textToNodeId);
+            calculateImportance(nodes, degreeMap);
 
-            // Parse JSON
-            ObjectMapper mapper = new ObjectMapper();
-            Map<String, Object> jsonMap = mapper.readValue(responseBody, Map.class);
-            try {
-                Map<String, Object> responseGraph = processGraph(jsonMap);
-                return new Gson().toJson(responseGraph);
-            } catch (Exception e) {
-                // TODO: handle exception
-                e.printStackTrace();
-            }
+            List<GraphNode> nodeList = new ArrayList<>(nodes.values());
+            List<GraphEdge> edgeList = edges;
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("nodes", nodeList);
+            result.put("edges", edgeList);
+            nodeIdCounter = 0;
+            return new Gson().toJson(result);
+
         } catch (Exception e) {
-            throw new RuntimeException("Error al procesar el texto con CoreNLP", e);
+            throw new RuntimeException("Error procesando el texto", e);
         }
-        return null;
     }
 
-    private Map<String, Object> processGraph(Map<String, Object> parsedJson) {
-        Map<String, GraphNode> nodes = new HashMap<>();
-        List<GraphEdge> edges = new ArrayList<>();
-        Map<String, Integer> frequencyMap = new HashMap<>();
-        Map<String, Integer> degreeMap = new HashMap<>();
+    private Map<String, Object> fetchFromCoreNLP(String text) throws Exception {
+        String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,ner,depparse,kbp,natlog,openie\"," +
+                "\"tokenize.language\":\"es\"," +
+                "\"outputFormat\":\"json\"}";
+        String encodedProps = URLEncoder.encode(properties, StandardCharsets.UTF_8);
+        String url = CORENLP_URL + "/?properties=" + encodedProps;
 
-        List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsedJson.get("sentences");
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("application/text-plain; charset=UTF-8"));
+        HttpEntity<String> request = new HttpEntity<>(text, headers);
+
+        ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+        ObjectMapper mapper = new ObjectMapper();
+        return mapper.readValue(response.getBody(), Map.class);
+    }
+
+    private void extractEntities(Map<String, Object> parsed, Map<String, GraphNode> nodes,
+            Map<String, String> textToId, Map<String, String> flatGroups) {
+
+        List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
+
         for (Map<String, Object> sentence : sentences) {
-            // 1. Entity mentions → nodos
             List<Map<String, Object>> entityMentions = (List<Map<String, Object>>) sentence.get("entitymentions");
+
             if (entityMentions != null) {
                 for (Map<String, Object> ent : entityMentions) {
                     String text = (String) ent.get("text");
                     String type = (String) ent.get("ner");
-                    addNode(nodes, frequencyMap, degreeMap, text, type);
+                    double confidence = 1.0;
+                    Map<String, Object> conf = (Map<String, Object>) ent.get("nerConfidences");
+                    if (conf != null && conf.containsKey(type)) {
+                        confidence = ((Number) conf.get(type)).doubleValue();
+                    }
+                    addNode(text, type, confidence, nodes, textToId);
                 }
             }
 
-            // 2. Tokens NER → nodos adicionales
             List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
             for (Map<String, Object> token : tokens) {
                 String ner = (String) token.get("ner");
-                if (!"O".equals(ner)) {
-                    String text = (String) token.get("word");
-                    addNode(nodes, frequencyMap, degreeMap, text, ner);
+                String word = (String) token.get("word");
+
+                if (!"O".equals(ner) && !textToId.containsKey(word)) {
+                    addNode(word, ner, 1.0, nodes, textToId);
                 }
             }
+        }
 
-            // 3. OpenIE triplets → relaciones
+        // Agregar entidades compuestas por dependencias (flat, compound)
+        for (Map.Entry<String, String> entry : flatGroups.entrySet()) {
+            String combined = entry.getKey();
+            if (!textToId.containsKey(combined)) {
+                addNode(combined, "Concepto", 1.0, nodes, textToId);
+            }
+        }
+    }
+
+    private void extractRelations(Map<String, Object> parsed,
+            Map<String, GraphNode> nodes,
+            List<GraphEdge> edges,
+            Map<String, Integer> degrees,
+            Map<String, String> textToId) {
+
+        Map<String, String> kbpMap = Map.of(
+                "per:title", "es",
+                "per:employee_of", "trabaja para",
+                "org:top_members/employees", "tiene como miembro",
+                "org:country_of_headquarters", "ubicado en",
+                "per:countries_of_residence", "vive en");
+
+        List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
+
+        for (Map<String, Object> sentence : sentences) {
             List<Map<String, Object>> openie = (List<Map<String, Object>>) sentence.get("openie");
             if (openie != null) {
-                for (Map<String, Object> triplet : openie) {
-                    String subject = (String) triplet.get("subject");
-                    String relation = (String) triplet.get("relation");
-                    String object = (String) triplet.get("object");
+                for (Map<String, Object> triple : openie) {
+                    String subject = (String) triple.get("subject");
+                    String object = (String) triple.get("object");
+                    String relation = (String) triple.get("relation");
 
-                    addNode(nodes, frequencyMap, degreeMap, subject, "Concepto");
-                    addNode(nodes, frequencyMap, degreeMap, object, "Concepto");
+                    connect(subject, object, relation, nodes, edges, degrees, textToId);
+                }
+            }
 
-                    edges.add(new GraphEdge(subject, object, relation));
-                    incrementDegree(degreeMap, subject);
-                    incrementDegree(degreeMap, object);
+            List<Map<String, Object>> kbp = (List<Map<String, Object>>) sentence.get("kbp");
+            if (kbp != null) {
+                for (Map<String, Object> triple : kbp) {
+                    String subject = (String) triple.get("subject");
+                    String object = (String) triple.get("object");
+                    String relation = kbpMap.getOrDefault((String) triple.get("relation"),
+                            (String) triple.get("relation"));
+
+                    connect(subject, object, relation, nodes, edges, degrees, textToId);
+                }
+            }
+
+            List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
+            for (Map<String, Object> dep : dependencies) {
+                String type = (String) dep.get("dep");
+                String gov = (String) dep.get("governorGloss");
+                String depWord = (String) dep.get("dependentGloss");
+
+                if ("appos".equals(type) || "nsubj".equals(type)) {
+                    connect(depWord, gov, "es", nodes, edges, degrees, textToId);
+                } else if ("nmod".equals(type)) {
+                    connect(gov, depWord, "de", nodes, edges, degrees, textToId);
                 }
             }
         }
+    }
 
-        // 4. Calcular importancia
+    private void calculateImportance(Map<String, GraphNode> nodes, Map<String, Integer> degrees) {
         for (GraphNode node : nodes.values()) {
-            int freq = frequencyMap.getOrDefault(node.getText(), 1);
-            int degree = degreeMap.getOrDefault(node.getText(), 0);
-            node.setFrequency(freq);
-            node.setImportance(freq * (1 + degree));
+            int degree = degrees.getOrDefault(node.getText(), 0);
+            node.setImportance(node.getConfidence() * node.getFrequency() * (1 + degree));
         }
-
-        // Resultado empaquetado
-        Map<String, Object> graph = new HashMap<>();
-        graph.put("nodes", new ArrayList<>(nodes.values()));
-        graph.put("edges", edges);
-        return graph;
     }
 
-    private void addNode(Map<String, GraphNode> nodes, Map<String, Integer> freqMap,
-            Map<String, Integer> degMap, String text, String type) {
-        nodes.computeIfAbsent(text, k -> {
-            GraphNode node = new GraphNode();
-            node.setId(UUID.randomUUID().toString());
-            node.setText(text);
-            node.setType(type);
-            return node;
-        });
-        freqMap.put(text, freqMap.getOrDefault(text, 0) + 1);
+    private void addNode(String text, String type, double confidence,
+            Map<String, GraphNode> nodes, Map<String, String> textToId) {
+        if (!textToId.containsKey(text)) {
+            String id = String.valueOf(nodeIdCounter++);
+            GraphNode node = new GraphNode(id, type.equals("O") ? "Concepto" : type, text, 1, 0.0);
+            node.setConfidence(confidence);
+            nodes.put(id, node);
+            textToId.put(text, id);
+        } else {
+            String id = textToId.get(text);
+            GraphNode node = nodes.get(id);
+            node.setFrequency(node.getFrequency() + 1);
+            node.setConfidence(Math.max(node.getConfidence(), confidence));
+        }
     }
 
-    private void incrementDegree(Map<String, Integer> map, String key) {
-        map.put(key, map.getOrDefault(key, 0) + 1);
+    private void connect(String fromText, String toText, String relation,
+            Map<String, GraphNode> nodes, List<GraphEdge> edges,
+            Map<String, Integer> degrees, Map<String, String> textToId) {
+        String sourceId = textToId.get(fromText);
+        String targetId = textToId.get(toText);
+        if (sourceId != null && targetId != null) {
+            edges.add(new GraphEdge(sourceId, targetId, relation));
+            degrees.put(fromText, degrees.getOrDefault(fromText, 0) + 1);
+            degrees.put(toText, degrees.getOrDefault(toText, 0) + 1);
+        }
     }
 
+    private Map<String, String> groupFlatDependencies(Map<String, Object> parsed) {
+        Map<String, String> combinedMap = new HashMap<>();
+
+        List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
+        for (Map<String, Object> sentence : sentences) {
+            List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
+            Map<Integer, String> indexToWord = new HashMap<>();
+            List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
+            for (Map<String, Object> token : tokens) {
+                indexToWord.put((Integer) token.get("index"), (String) token.get("word"));
+            }
+
+            for (Map<String, Object> dep : dependencies) {
+                if ("flat".equals(dep.get("dep"))) {
+                    String governor = indexToWord.get(dep.get("governor"));
+                    String dependent = indexToWord.get(dep.get("dependent"));
+                    String combined = governor + " " + dependent;
+                    combinedMap.put(combined, combined);
+                }
+            }
+        }
+        return combinedMap;
+    }
 }
