@@ -20,37 +20,68 @@ public class GraphExtractorService implements Extractor {
     private int nodeIdCounter = 1;
 
     @Override
-    public String extractTriples(String inputText) {
+    public String extractTriples(List<String> inputText) {
         try {
-            Map<String, Object> parsedJson = fetchFromCoreNLP(inputText);
-            System.out.println(parsedJson);
-
             Map<String, GraphNode> nodes = new LinkedHashMap<>();
             List<GraphEdge> edges = new ArrayList<>();
             Map<String, Integer> degreeMap = new HashMap<>();
             Map<String, String> textToNodeId = new HashMap<>();
+            Map<String, Object> result = new HashMap<>();
+            for(String textDoc:inputText){
+            for(String text:splitTextIntoChunks(textDoc)){
+            Map<String, Object> parsedJson = fetchFromCoreNLP(text);
+
+           
             Map<String, String> flatGroups = groupFlatDependencies(parsedJson);
 
             extractEntities(parsedJson, nodes, textToNodeId, flatGroups);
-            extractRelations(parsedJson, nodes, edges, degreeMap, textToNodeId);
+            extractRelations(parsedJson, nodes, edges, degreeMap, textToNodeId, flatGroups);
             calculateImportance(nodes, degreeMap);
 
             List<GraphNode> nodeList = new ArrayList<>(nodes.values());
             List<GraphEdge> edgeList = edges;
 
-            Map<String, Object> result = new HashMap<>();
+           
             result.put("nodes", nodeList);
             result.put("edges", edgeList);
             nodeIdCounter = 0;
+        }}
             return new Gson().toJson(result);
 
         } catch (Exception e) {
             throw new RuntimeException("Error procesando el texto", e);
         }
     }
+    private List<String> splitTextIntoChunks(String text) {
+        text="El estudiante trabaja en la Universidad de Las Villas. Python es un software. Guido van Rossu creó el lenguaje Python en los Países Bajos.";
+
+        List<String> chunks = new ArrayList<>();
+        String[] sentences = text.split("(?<=[.!?])\\s*");
+    
+        StringBuilder currentChunk = new StringBuilder();
+        int count = 0;
+    
+        for (String sentence : sentences) {
+            currentChunk.append(sentence).append(" ");
+            count++;
+            if (count == 20) {
+                chunks.add(currentChunk.toString().trim());
+                currentChunk.setLength(0); // Limpia el StringBuilder para el próximo fragmento
+                count = 0;
+            }
+        }
+    
+        // Agregar el último fragmento si hay oraciones sobrantes
+        if (currentChunk.length() > 0) {
+            chunks.add(currentChunk.toString().trim());
+        }
+    
+        return chunks;
+    }
+   
 
     private Map<String, Object> fetchFromCoreNLP(String text) throws Exception {
-        String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,ner,depparse,kbp,natlog,openie\"," +
+                String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,ner,depparse,kbp,natlog,openie\"," +
                 "\"tokenize.language\":\"es\"," +
                 "\"outputFormat\":\"json\"}";
         String encodedProps = URLEncoder.encode(properties, StandardCharsets.UTF_8);
@@ -62,6 +93,7 @@ public class GraphExtractorService implements Extractor {
 
         ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
         ObjectMapper mapper = new ObjectMapper();
+        System.out.println(response.getBody());
         return mapper.readValue(response.getBody(), Map.class);
     }
 
@@ -78,30 +110,40 @@ public class GraphExtractorService implements Extractor {
                     String text = (String) ent.get("text");
                     String type = (String) ent.get("ner");
                     double confidence = 1.0;
-                    Map<String, Object> conf = (Map<String, Object>) ent.get("nerConfidences");
+                    /* Map<String, Object> conf = (Map<String, Object>) ent.get("nerConfidences");
                     if (conf != null && conf.containsKey(type)) {
                         confidence = ((Number) conf.get(type)).doubleValue();
-                    }
-                    addNode(text, type, confidence, nodes, textToId);
+                    } */
+                    addNode(text, type, nodes, textToId);
                 }
             }
 
-            List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
-            for (Map<String, Object> token : tokens) {
-                String ner = (String) token.get("ner");
-                String word = (String) token.get("word");
-
-                if (!"O".equals(ner) && !textToId.containsKey(word)) {
-                    addNode(word, ner, 1.0, nodes, textToId);
-                }
-            }
+            /*
+             * List<Map<String, Object>> tokens = (List<Map<String, Object>>)
+             * sentence.get("tokens");
+             * for (Map<String, Object> token : tokens) {
+             * String ner = (String) token.get("ner");
+             * String word = (String) token.get("word");
+             * 
+             * if (!"O".equals(ner) && !textToId.containsKey(word)) {
+             * addNode(word, ner, 1.0, nodes, textToId);
+             * }
+             * }
+             */
         }
 
         // Agregar entidades compuestas por dependencias (flat, compound)
-        for (Map.Entry<String, String> entry : flatGroups.entrySet()) {
-            String combined = entry.getKey();
+        /*
+         * for (Map.Entry<String, String> entry : flatGroups.entrySet()) {
+         * String combined = entry.getKey();
+         * if (!textToId.containsKey(combined)) {
+         * addNode(combined, "Concepto", 1.0, nodes, textToId);
+         * }
+         * }
+         */
+        for (String combined : flatGroups.keySet()) {
             if (!textToId.containsKey(combined)) {
-                addNode(combined, "Concepto", 1.0, nodes, textToId);
+                addNode(combined, "Concepto",  nodes, textToId);
             }
         }
     }
@@ -110,7 +152,7 @@ public class GraphExtractorService implements Extractor {
             Map<String, GraphNode> nodes,
             List<GraphEdge> edges,
             Map<String, Integer> degrees,
-            Map<String, String> textToId) {
+            Map<String, String> textToId, Map<String, String> flatGroups) {
 
         Map<String, String> kbpMap = Map.of(
                 "per:title", "es",
@@ -124,12 +166,32 @@ public class GraphExtractorService implements Extractor {
         for (Map<String, Object> sentence : sentences) {
             List<Map<String, Object>> openie = (List<Map<String, Object>>) sentence.get("openie");
             if (openie != null) {
+                Set<String> usedSubjects = new HashSet<>();
                 for (Map<String, Object> triple : openie) {
                     String subject = (String) triple.get("subject");
                     String object = (String) triple.get("object");
                     String relation = (String) triple.get("relation");
-
+                    System.out.println(triple);
+                    System.out.println(textToId);
                     connect(subject, object, relation, nodes, edges, degrees, textToId);
+                    if (subject.equals("que") || !textToId.containsKey(subject)) {
+                        subject = resolveSubject(sentence, relation);
+                    }
+
+                    if (object == null || object.trim().isEmpty())
+                        continue;
+
+                    if (!textToId.containsKey(subject)) {
+                        addNode(subject, "Concepto",  nodes, textToId);
+                    }
+                    if (!textToId.containsKey(object)) {
+                        addNode(object, "Concepto",  nodes, textToId);
+                    }
+
+                    if (!usedSubjects.contains(subject + "_" + relation)) {
+                        usedSubjects.add(subject + "_" + relation);
+                        connect(subject, object, relation, nodes, edges, degrees, textToId);
+                    }
                 }
             }
 
@@ -150,7 +212,11 @@ public class GraphExtractorService implements Extractor {
                 String type = (String) dep.get("dep");
                 String gov = (String) dep.get("governorGloss");
                 String depWord = (String) dep.get("dependentGloss");
-
+                for (String key : flatGroups.keySet()) {
+                    if (key.contains(depWord)) {
+                        depWord = key; // Devuelve la clave que contiene depWord
+                    }
+                }
                 if ("appos".equals(type) || "nsubj".equals(type)) {
                     connect(depWord, gov, "es", nodes, edges, degrees, textToId);
                 } else if ("nmod".equals(type)) {
@@ -160,26 +226,37 @@ public class GraphExtractorService implements Extractor {
         }
     }
 
+    private String resolveSubject(Map<String, Object> sentence, String relationVerb) {
+        List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
+        for (Map<String, Object> dep : dependencies) {
+            if ("nsubj".equals(dep.get("dep")) && relationVerb.equals(dep.get("governorGloss"))) {
+                System.out.println((String) dep.get("dependentGloss"));
+                return (String) dep.get("dependentGloss");
+            }
+        }
+        return relationVerb;
+    }
+
     private void calculateImportance(Map<String, GraphNode> nodes, Map<String, Integer> degrees) {
         for (GraphNode node : nodes.values()) {
             int degree = degrees.getOrDefault(node.getText(), 0);
-            node.setImportance(node.getConfidence() * node.getFrequency() * (1 + degree));
+            node.setImportance( node.getFrequency() * (1 + degree));
         }
     }
 
-    private void addNode(String text, String type, double confidence,
+    private void addNode(String text, String type, 
             Map<String, GraphNode> nodes, Map<String, String> textToId) {
         if (!textToId.containsKey(text)) {
             String id = String.valueOf(nodeIdCounter++);
             GraphNode node = new GraphNode(id, type.equals("O") ? "Concepto" : type, text, 1, 0.0);
-            node.setConfidence(confidence);
+            //node.setConfidence(confidence);
             nodes.put(id, node);
             textToId.put(text, id);
         } else {
             String id = textToId.get(text);
             GraphNode node = nodes.get(id);
             node.setFrequency(node.getFrequency() + 1);
-            node.setConfidence(Math.max(node.getConfidence(), confidence));
+            //node.setConfidence(Math.max(node.getConfidence(), confidence));
         }
     }
 

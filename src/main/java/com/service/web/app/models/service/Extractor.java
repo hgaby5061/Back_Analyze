@@ -11,5 +11,5 @@ public interface Extractor {
 	 * extractAnot(List<Document> docum); public List<Document>
 	 * extractProp(List<Document> docum);
 	 */
-	public String extractTriples(String doc);
+	public String extractTriples(List<String> doc);
 }

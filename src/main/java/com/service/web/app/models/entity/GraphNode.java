@@ -4,9 +4,27 @@ package com.service.web.app.models.entity;
 public class GraphNode {
     private String id;
     private String type;
-    private String text;
+    private String name;
     private int frequency;
     private double importance;
+    //private double confidence;
+
+    public GraphNode(String id, String type, String text, int frequency, double importance) {
+        this.id = id;
+        this.type = type;
+        this.name = text;
+        this.frequency = frequency;
+        this.importance = importance;
+        // this.confidence = 1.0;
+    }
+
+    /* public double getConfidence() {
+        return confidence;
+    }
+
+    public void setConfidence(double confidence) {
+        this.confidence = confidence;
+    } */
 
     public String getId() {
         return id;
@@ -25,11 +43,11 @@ public class GraphNode {
     }
 
     public String getText() {
-        return text;
+        return name;
     }
 
-    public void setText(String text) {
-        this.text = text;
+    public void setText(String name) {
+        this.name = name;
     }
 
     public int getFrequency() {

@@ -39,12 +39,12 @@ public class NerController {
 		// List<Relations> rel = null;
 		String rel = null;
 		if (doc.size() > 0) {
+			System.out.println(doc.size());
 			// Recibir del front solo los textos de cada disurso
-			for (String docu : doc) {
-				rel = extract.extractTriples(docu);
-				if (rel == null) {
-					return ResponseEntity.badRequest().body(rel);
-				}
+
+			rel = extract.extractTriples(doc);
+			if (rel == null) {
+				return ResponseEntity.badRequest().body(rel);
 			}
 
 			System.out.println("TERMINO RELATIONS");
