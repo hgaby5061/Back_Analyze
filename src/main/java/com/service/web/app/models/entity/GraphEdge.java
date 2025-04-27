@@ -1,5 +1,7 @@
 package com.service.web.app.models.entity;
 
+import java.util.Objects;
+
 // GraphEdge.java
 public class GraphEdge {
     private String source;
@@ -34,6 +36,23 @@ public class GraphEdge {
 
     public void setrelationship(String relationship) {
         this.relationship = relationship;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
+        GraphEdge edge = (GraphEdge) o;
+        return source.equals(edge.source) &&
+                target.equals(edge.target) &&
+                relationship.equals(edge.relationship);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(source, target, relationship);
     }
 
     // Constructors, Getters, Setters

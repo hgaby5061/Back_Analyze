@@ -18,258 +18,418 @@ public class GraphExtractorService implements Extractor {
     private final String CORENLP_URL = "http://localhost:9000";
     private final RestTemplate restTemplate = new RestTemplate();
     private int nodeIdCounter = 1;
+    // Lista ampliada de stopwords en español
+    private static final Set<String> STOPWORDS = Set.of(
+            "de", "en", "qué", "es", "son", "ser", "un", "una", "el", "la", "los", "las", "y", "con", "para", "por",
+            "se", "su");
+
+    // Tipos NER a excluir
+    private static final Set<String> EXCLUDED_NER = Set.of(
+            "NUMBER", "TIME", "MONEY", "PERCENT");
 
     @Override
     public String extractTriples(List<String> inputText) {
         try {
             Map<String, GraphNode> nodes = new LinkedHashMap<>();
-            List<GraphEdge> edges = new ArrayList<>();
+            Set<GraphEdge> edges = new LinkedHashSet<>();
             Map<String, Integer> degreeMap = new HashMap<>();
             Map<String, String> textToNodeId = new HashMap<>();
             Map<String, Object> result = new HashMap<>();
-            for(String textDoc:inputText){
-            for(String text:splitTextIntoChunks(textDoc)){
-            Map<String, Object> parsedJson = fetchFromCoreNLP(text);
 
-           
-            Map<String, String> flatGroups = groupFlatDependencies(parsedJson);
+            for (String textDoc : inputText) {
+                for (String text : splitTextIntoChunks(textDoc)) {
+                    Map<String, Object> parsedJson = fetchFromCoreNLP(text);
 
-            extractEntities(parsedJson, nodes, textToNodeId, flatGroups);
-            extractRelations(parsedJson, nodes, edges, degreeMap, textToNodeId, flatGroups);
-            calculateImportance(nodes, degreeMap);
+                    Map<String, String> flatGroups = groupFlatDependencies(parsedJson);
+
+                    extractEntities(parsedJson, nodes, textToNodeId, flatGroups);
+                    extractRelations(parsedJson, nodes, edges, degreeMap, textToNodeId, flatGroups);
+                    calculateImportance(nodes, degreeMap);
+                }
+            }
 
             List<GraphNode> nodeList = new ArrayList<>(nodes.values());
-            List<GraphEdge> edgeList = edges;
+            Set<GraphEdge> edgeList = edges;
 
-           
             result.put("nodes", nodeList);
             result.put("edges", edgeList);
-            nodeIdCounter = 0;
-        }}
+            nodeIdCounter = 1; // Reiniciar para la próxima ejecución
+
             return new Gson().toJson(result);
 
         } catch (Exception e) {
             throw new RuntimeException("Error procesando el texto", e);
         }
     }
-    private List<String> splitTextIntoChunks(String text) {
-        text="El estudiante trabaja en la Universidad de Las Villas. Python es un software. Guido van Rossu creó el lenguaje Python en los Países Bajos.";
 
+    private List<String> splitTextIntoChunks(String text) {
         List<String> chunks = new ArrayList<>();
         String[] sentences = text.split("(?<=[.!?])\\s*");
-    
         StringBuilder currentChunk = new StringBuilder();
         int count = 0;
-    
+
         for (String sentence : sentences) {
             currentChunk.append(sentence).append(" ");
             count++;
-            if (count == 20) {
+            if (count == 10) {
                 chunks.add(currentChunk.toString().trim());
-                currentChunk.setLength(0); // Limpia el StringBuilder para el próximo fragmento
+                currentChunk.setLength(0);
                 count = 0;
             }
         }
-    
-        // Agregar el último fragmento si hay oraciones sobrantes
+
         if (currentChunk.length() > 0) {
             chunks.add(currentChunk.toString().trim());
         }
-    
         return chunks;
     }
-   
 
     private Map<String, Object> fetchFromCoreNLP(String text) throws Exception {
-                String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,ner,depparse,kbp,natlog,openie\"," +
-                "\"tokenize.language\":\"es\"," +
+        String properties = "{\"annotators\":\"tokenize,ssplit,mwt,pos,depparse,ner,kbp,natlog,openie\"," +
+                "\"tokenize.language\": \"es\"," +
+                "\"pos.model\": \"edu/stanford/nlp/models/pos-tagger/spanish-ud.tagger\"," +
+                "\"depparse.model\":\"edu/stanford/nlp/models/parser/nndep/UD_Spanish.gz\"," +
+                "\"parse.type\":\"enhancedPlusPlusDependencies\"," +
                 "\"outputFormat\":\"json\"}";
         String encodedProps = URLEncoder.encode(properties, StandardCharsets.UTF_8);
         String url = CORENLP_URL + "/?properties=" + encodedProps;
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.parseMediaType("application/text-plain; charset=UTF-8"));
+        headers.setContentType(MediaType.parseMediaType("text/plain; charset=UTF-8"));
         HttpEntity<String> request = new HttpEntity<>(text, headers);
 
         ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
         ObjectMapper mapper = new ObjectMapper();
-        System.out.println(response.getBody());
         return mapper.readValue(response.getBody(), Map.class);
     }
 
     private void extractEntities(Map<String, Object> parsed, Map<String, GraphNode> nodes,
-            Map<String, String> textToId, Map<String, String> flatGroups) {
-
+            Map<String, String> textToNodeId, Map<String, String> flatGroups) {
         List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
 
         for (Map<String, Object> sentence : sentences) {
+            List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
+            Map<Integer, String> indexToLemma = new HashMap<>();
+            for (Map<String, Object> token : tokens) {
+                indexToLemma.put((Integer) token.get("index"), (String) token.get("lemma"));
+            }
             List<Map<String, Object>> entityMentions = (List<Map<String, Object>>) sentence.get("entitymentions");
 
             if (entityMentions != null) {
                 for (Map<String, Object> ent : entityMentions) {
                     String text = (String) ent.get("text");
                     String type = (String) ent.get("ner");
-                    double confidence = 1.0;
-                    /* Map<String, Object> conf = (Map<String, Object>) ent.get("nerConfidences");
-                    if (conf != null && conf.containsKey(type)) {
-                        confidence = ((Number) conf.get(type)).doubleValue();
-                    } */
-                    addNode(text, type, nodes, textToId);
+                    String lemma = indexToLemma.get(ent.get("headToken"));
+                    if (!EXCLUDED_NER.contains(type)) {
+                        // Añadir nodo con tipo NER real
+                        addNode(text, type, nodes, textToNodeId, null);
+                    }
                 }
             }
 
-            /*
-             * List<Map<String, Object>> tokens = (List<Map<String, Object>>)
-             * sentence.get("tokens");
-             * for (Map<String, Object> token : tokens) {
-             * String ner = (String) token.get("ner");
-             * String word = (String) token.get("word");
-             * 
-             * if (!"O".equals(ner) && !textToId.containsKey(word)) {
-             * addNode(word, ner, 1.0, nodes, textToId);
-             * }
-             * }
-             */
-        }
-
-        // Agregar entidades compuestas por dependencias (flat, compound)
-        /*
-         * for (Map.Entry<String, String> entry : flatGroups.entrySet()) {
-         * String combined = entry.getKey();
-         * if (!textToId.containsKey(combined)) {
-         * addNode(combined, "Concepto", 1.0, nodes, textToId);
-         * }
-         * }
-         */
-        for (String combined : flatGroups.keySet()) {
-            if (!textToId.containsKey(combined)) {
-                addNode(combined, "Concepto",  nodes, textToId);
+            for (String combined : flatGroups.keySet()) {
+                String lemma = combined.toLowerCase();
+                if (isValidEntity(sentence, combined)) {
+                    addNode(combined, "Concepto", nodes, textToNodeId, lemma);
+                }
             }
         }
     }
 
-    private void extractRelations(Map<String, Object> parsed,
-            Map<String, GraphNode> nodes,
-            List<GraphEdge> edges,
-            Map<String, Integer> degrees,
-            Map<String, String> textToId, Map<String, String> flatGroups) {
-
+    private void extractRelations(Map<String, Object> parsed, Map<String, GraphNode> nodes,
+            Set<GraphEdge> edges, Map<String, Integer> degreeMap,
+            Map<String, String> textToNodeId, Map<String, String> flatGroups) {
         Map<String, String> kbpMap = Map.of(
                 "per:title", "es",
                 "per:employee_of", "trabaja para",
-                "org:top_members/employees", "tiene como miembro",
+                "org:top_members_employees", "tiene como miembro",
                 "org:country_of_headquarters", "ubicado en",
                 "per:countries_of_residence", "vive en");
 
         List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
 
         for (Map<String, Object> sentence : sentences) {
+            List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
+            Map<Integer, String> indexToPos = new HashMap<>();
+            Map<Integer, String> indexToLemma = new HashMap<>();
+            for (Map<String, Object> token : tokens) {
+                indexToLemma.put((Integer) token.get("index"), (String) token.get("lemma"));
+                indexToPos.put((Integer) token.get("index"), (String) token.get("pos"));
+            }
+
+            // Procesar OpenIE
             List<Map<String, Object>> openie = (List<Map<String, Object>>) sentence.get("openie");
             if (openie != null) {
-                Set<String> usedSubjects = new HashSet<>();
                 for (Map<String, Object> triple : openie) {
                     String subject = (String) triple.get("subject");
                     String object = (String) triple.get("object");
                     String relation = (String) triple.get("relation");
-                    System.out.println(triple);
-                    System.out.println(textToId);
-                    connect(subject, object, relation, nodes, edges, degrees, textToId);
-                    if (subject.equals("que") || !textToId.containsKey(subject)) {
-                        subject = resolveSubject(sentence, relation);
+
+                    if (isValidRelation(relation, indexToPos)) {
+                        if (isValidTriple(sentence, subject, object)) {
+                            addNodeIfValid(subject, "Concepto", sentence, nodes, textToNodeId);
+                            addNodeIfValid(object, "Concepto", sentence, nodes, textToNodeId);
+
+                            // Obtener lemmas para subject y object
+                            String subjectLemma = obtenerLemmaDeTexto(sentence, subject);
+                            String objectLemma = obtenerLemmaDeTexto(sentence, object);
+
+                            connect(subjectLemma, objectLemma, relation, nodes, edges, degreeMap, textToNodeId);
+
+                        }
                     }
 
-                    if (object == null || object.trim().isEmpty())
-                        continue;
-
-                    if (!textToId.containsKey(subject)) {
-                        addNode(subject, "Concepto",  nodes, textToId);
-                    }
-                    if (!textToId.containsKey(object)) {
-                        addNode(object, "Concepto",  nodes, textToId);
-                    }
-
-                    if (!usedSubjects.contains(subject + "_" + relation)) {
-                        usedSubjects.add(subject + "_" + relation);
-                        connect(subject, object, relation, nodes, edges, degrees, textToId);
-                    }
                 }
             }
 
+            // Procesar KBP
             List<Map<String, Object>> kbp = (List<Map<String, Object>>) sentence.get("kbp");
             if (kbp != null) {
                 for (Map<String, Object> triple : kbp) {
+                    System.out.println(triple);
                     String subject = (String) triple.get("subject");
                     String object = (String) triple.get("object");
                     String relation = kbpMap.getOrDefault((String) triple.get("relation"),
                             (String) triple.get("relation"));
 
-                    connect(subject, object, relation, nodes, edges, degrees, textToId);
-                }
-            }
+                    if (isValidTriple(sentence, subject, object)) {
+                        addNodeIfValid(subject, "Concepto", sentence, nodes, textToNodeId);
+                        addNodeIfValid(object, "Concepto", sentence, nodes, textToNodeId);
 
-            List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
-            for (Map<String, Object> dep : dependencies) {
-                String type = (String) dep.get("dep");
-                String gov = (String) dep.get("governorGloss");
-                String depWord = (String) dep.get("dependentGloss");
-                for (String key : flatGroups.keySet()) {
-                    if (key.contains(depWord)) {
-                        depWord = key; // Devuelve la clave que contiene depWord
+                        // Obtener lemmas para subject y object
+                        String subjectLemma = obtenerLemmaDeTexto(sentence, subject);
+                        String objectLemma = obtenerLemmaDeTexto(sentence, object);
+
+                        connect(subjectLemma, objectLemma, relation, nodes, edges, degreeMap, textToNodeId);
+
                     }
                 }
-                if ("appos".equals(type) || "nsubj".equals(type)) {
-                    connect(depWord, gov, "es", nodes, edges, degrees, textToId);
-                } else if ("nmod".equals(type)) {
-                    connect(gov, depWord, "de", nodes, edges, degrees, textToId);
+            }
+
+            // Procesar dependencias
+            extractFromDependencies(sentence, nodes, edges, degreeMap, textToNodeId);
+        }
+    }
+
+    private boolean isValidEntity(Map<String, Object> sentence, String text) {
+
+        if (text.contains("\n") || STOPWORDS.contains(text.toLowerCase())) {
+            System.out.println(text + "No es valid entity");
+            return false;
+        }
+
+        List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
+        boolean containsWord = false;
+        for (Map<String, Object> token : tokens) {
+            String word = (String) token.get("word");
+            String pos = (String) token.get("pos");
+            String ner = (String) token.get("ner");
+            System.out.println(word + "este es word para" + text);
+            if (text.contains(word)) {
+
+                containsWord = true;
+                if (!isValidPos(pos) || ner.equals("O")) {
+                    return false;
+                }
+            }
+        }
+        // Si no contiene ninguna palabra del texto, no es válido
+        if (!containsWord) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isValidPos(String pos) {
+        return pos.startsWith("N") || pos.startsWith("PROPN") || pos.startsWith("ADJ");
+    }
+
+    private boolean isValidTriple(Map<String, Object> sentence, String subject, String object) {
+        System.out.println(subject + "" + object);
+        return subject != null && object != null && isValidEntity(sentence, subject) && isValidEntity(sentence, object);
+    }
+
+    private boolean isValidRelation(String relation, Map<Integer, String> indexToPos) {
+        if (relation == null || relation.isEmpty())
+            return false;
+        String[] words = relation.split(" ");
+        System.out.println(relation);
+        for (String word : words) {
+            if (word.length() < 3) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void addNodeIfValid(String text, String type, Map<String, Object> sentence,
+            Map<String, GraphNode> nodes, Map<String, String> textToNodeId) {
+
+        if (isValidEntity(sentence, text)) {
+            System.err.println(textToNodeId);
+            System.out.println("node valid y valid entity con kbp" + text);
+            // Evitar crear nodo "Concepto" si ya existe nodo con tipo NER distinto de
+            // "Concepto" para el mismo texto
+            boolean existsNER = nodes.values().stream()
+                    .anyMatch(n -> n.getText().equals(text) && !n.getType().equals("Concepto"));
+            if (type.equals("Concepto") && existsNER) {
+                System.out.println("este nodo ya existe" + text);
+                return;
+            }
+            // List<Map<String, Object>> tokens = (List<Map<String, Object>>)
+            // sentence.get("tokens");
+            if (!nodes.containsKey(text)) {
+                String lemma = obtenerLemmaDeTexto(sentence, text);
+                System.out.println(nodes);
+                System.out.println(lemma + "" + text);
+                addNode(text, type, nodes, textToNodeId, lemma);
+            }
+
+        }
+    }
+
+    private String obtenerLemmaDeTexto(Map<String, Object> sentence, String text) {
+        List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
+        return tokens.stream()
+                .filter(t -> text.equals(t.get("word")))
+                .findFirst()
+                .map(t -> (String) t.get("lemma"))
+                .orElse(text);
+    }
+
+    private void extractFromDependencies(Map<String, Object> sentence, Map<String, GraphNode> nodes,
+            Set<GraphEdge> edges, Map<String, Integer> degreeMap,
+            Map<String, String> textToNodeId) {
+        List<Map<String, Object>> deps = (List<Map<String, Object>>) sentence.get("enhancedPlusPlusDependencies");
+        Map<String, String> wordToGov = new HashMap<>();
+        Map<String, String> wordToRel = new HashMap<>();
+        Map<String, String> verbToSubject = new HashMap<>();
+        Map<String, String> verbToObject = new HashMap<>();
+
+        for (Map<String, Object> dep : deps) {
+            String depWord = (String) dep.get("dependentGloss");
+            String govWord = (String) dep.get("governorGloss");
+            String type = (String) dep.get("dep");
+
+            if ("nsubj".equals(type)) {
+                verbToSubject.put(govWord, depWord);
+            } else if ("obj".equals(type)) {
+                verbToObject.put(govWord, depWord);
+            }
+
+            wordToGov.put(depWord, govWord);
+            wordToRel.put(depWord, type);
+        }
+
+        for (Map<String, Object> dep : deps) {
+            String subject = (String) dep.get("dependentGloss");
+            if ("nsubj".equals(dep.get("dep"))) {
+                String verb = (String) dep.get("governorGloss");
+                for (Map<String, Object> objDep : deps) {
+                    if ("obj".equals(objDep.get("dep")) && objDep.get("governorGloss").equals(verb)) {
+                        String object = (String) objDep.get("dependentGloss");
+                        if (isValidTriple(sentence, subject, object)) {
+                            addNodeIfValid(subject, "Concepto", sentence, nodes, textToNodeId);
+                            addNodeIfValid(object, "Concepto", sentence, nodes, textToNodeId);
+                            connect(subject, object, verb, nodes, edges, degreeMap, textToNodeId);
+                        }
+                    }
+                }
+            }
+        }
+        for (String verb : verbToSubject.keySet()) {
+            String subject = verbToSubject.get(verb);
+            if (verbToObject.containsKey(verb)) {
+                String object = verbToObject.get(verb);
+                if (isValidTriple(sentence, subject, object)) {
+                    addNodeIfValid(subject, "Concepto", sentence, nodes, textToNodeId);
+                    addNodeIfValid(object, "Concepto", sentence, nodes, textToNodeId);
+                    connect(subject, object, verb, nodes, edges, degreeMap, textToNodeId);
                 }
             }
         }
     }
 
-    private String resolveSubject(Map<String, Object> sentence, String relationVerb) {
-        List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
-        for (Map<String, Object> dep : dependencies) {
-            if ("nsubj".equals(dep.get("dep")) && relationVerb.equals(dep.get("governorGloss"))) {
-                System.out.println((String) dep.get("dependentGloss"));
-                return (String) dep.get("dependentGloss");
-            }
-        }
-        return relationVerb;
-    }
-
-    private void calculateImportance(Map<String, GraphNode> nodes, Map<String, Integer> degrees) {
+    private void calculateImportance(Map<String, GraphNode> nodes, Map<String, Integer> degreeMap) {
         for (GraphNode node : nodes.values()) {
-            int degree = degrees.getOrDefault(node.getText(), 0);
-            node.setImportance( node.getFrequency() * (1 + degree));
+            int degree = degreeMap.getOrDefault(node.getText(), 0);
+            node.setImportance(node.getFrequency() * (1 + degree));
         }
     }
 
-    private void addNode(String text, String type, 
-            Map<String, GraphNode> nodes, Map<String, String> textToId) {
-        if (!textToId.containsKey(text)) {
-            String id = String.valueOf(nodeIdCounter++);
-            GraphNode node = new GraphNode(id, type.equals("O") ? "Concepto" : type, text, 1, 0.0);
-            //node.setConfidence(confidence);
-            nodes.put(id, node);
-            textToId.put(text, id);
+    private void addNode(String text, String type, Map<String, GraphNode> nodes, Map<String, String> textToNodeId,
+            String lemma) {
+        String normalizedText = lemma != null ? lemma : text.toLowerCase();
+        // Buscar si ya existe nodo con el mismo texto y tipo NER distinto de "Concepto"
+        Optional<String> existingKey = textToNodeId.keySet().stream()
+                .filter(k -> k.startsWith(normalizedText + "_") && !k.endsWith("_Concepto"))
+                .findFirst();
+
+        String uniqueKey;
+        if (existingKey.isPresent()) {
+            // Mantener tipo NER existente para evitar sobrescritura
+            uniqueKey = existingKey.get();
         } else {
-            String id = textToId.get(text);
+            uniqueKey = normalizedText + "_" + type;
+        }
+
+        if (!textToNodeId.containsKey(uniqueKey)) {
+            String id = String.valueOf(nodeIdCounter++);
+            GraphNode node = new GraphNode(id, uniqueKey.split("_", 2)[1], text, 1, 0.0);
+            nodes.put(id, node);
+            textToNodeId.put(uniqueKey, id);
+        } else {
+            String id = textToNodeId.get(uniqueKey);
             GraphNode node = nodes.get(id);
             node.setFrequency(node.getFrequency() + 1);
-            //node.setConfidence(Math.max(node.getConfidence(), confidence));
         }
     }
 
     private void connect(String fromText, String toText, String relation,
-            Map<String, GraphNode> nodes, List<GraphEdge> edges,
-            Map<String, Integer> degrees, Map<String, String> textToId) {
-        String sourceId = textToId.get(fromText);
-        String targetId = textToId.get(toText);
-        if (sourceId != null && targetId != null) {
-            edges.add(new GraphEdge(sourceId, targetId, relation));
-            degrees.put(fromText, degrees.getOrDefault(fromText, 0) + 1);
-            degrees.put(toText, degrees.getOrDefault(toText, 0) + 1);
+            Map<String, GraphNode> nodes, Set<GraphEdge> edges,
+            Map<String, Integer> degreeMap, Map<String, String> textToId) {
+        // Buscar claves exactas para fromText y toText con cualquier tipo
+        /*
+         * Optional<String> fromKeyOpt = textToNodeId.keySet().stream()
+         * .filter(k -> k.startsWith(fromText + "_"))
+         * .findFirst();
+         * Optional<String> toKeyOpt = textToNodeId.keySet().stream()
+         * .filter(k -> k.startsWith(toText + "_"))
+         * .findFirst();
+         * 
+         * if (fromKeyOpt.isEmpty() || toKeyOpt.isEmpty()) {
+         * return;
+         * }
+         * 
+         * String fromKey = fromKeyOpt.get();
+         * String toKey = toKeyOpt.get();
+         */
+
+        String fromKey = fromText + "_" + getNodeType(fromText, nodes);
+        String toKey = toText + "_" + getNodeType(toText, nodes);
+        String sourceId = textToId.get(fromKey);
+        String targetId = textToId.get(toKey);
+
+        if (sourceId != null && targetId != null && !sourceId.equals(targetId)) {
+            // Check if the edge already exists to avoid duplicates
+            boolean edgeExists = edges.stream().anyMatch(edge -> edge.getSource().equals(sourceId) &&
+                    edge.getTarget().equals(targetId) && edge.getrelationship().equals(relation)
+
+            );
+            if (!edgeExists) {
+                edges.add(new GraphEdge(sourceId, targetId, relation));
+                degreeMap.put(fromText, degreeMap.getOrDefault(fromText, 0) + 1);
+                degreeMap.put(toText, degreeMap.getOrDefault(toText, 0) + 1);
+            }
         }
+    }
+
+    private String getNodeType(String text, Map<String, GraphNode> nodes) {
+        return nodes.values().stream()
+                .filter(n -> n.getText().equalsIgnoreCase(text))
+                .findFirst()
+                .map(GraphNode::getType)
+                .orElse("Concepto");
     }
 
     private Map<String, String> groupFlatDependencies(Map<String, Object> parsed) {
@@ -277,18 +437,39 @@ public class GraphExtractorService implements Extractor {
 
         List<Map<String, Object>> sentences = (List<Map<String, Object>>) parsed.get("sentences");
         for (Map<String, Object> sentence : sentences) {
-            List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence.get("basicDependencies");
+            List<Map<String, Object>> dependencies = (List<Map<String, Object>>) sentence
+                    .get("enhancedPlusPlusDependencies");
             Map<Integer, String> indexToWord = new HashMap<>();
+            Map<Integer, String> indexToPos = new HashMap<>();
             List<Map<String, Object>> tokens = (List<Map<String, Object>>) sentence.get("tokens");
             for (Map<String, Object> token : tokens) {
-                indexToWord.put((Integer) token.get("index"), (String) token.get("word"));
+                int index = (Integer) token.get("index");
+                indexToWord.put(index, (String) token.get("word"));
+                indexToPos.put(index, (String) token.get("pos"));
             }
 
+            Map<Integer, StringBuilder> combinedPhrases = new HashMap<>();
             for (Map<String, Object> dep : dependencies) {
-                if ("flat".equals(dep.get("dep"))) {
-                    String governor = indexToWord.get(dep.get("governor"));
-                    String dependent = indexToWord.get(dep.get("dependent"));
-                    String combined = governor + " " + dependent;
+                String type = (String) dep.get("dep");
+                Integer govIndex = (Integer) dep.get("governor");
+                Integer depIndex = (Integer) dep.get("dependent");
+                String depPos = indexToPos.get(depIndex);
+                String govPos = indexToPos.get(govIndex);
+
+                if (("flat".equals(type) || "compound".equals(type) || "amod".equals(type)) &&
+                        (depPos.startsWith("N") || govPos.startsWith("N"))) {
+                    String govWord = indexToWord.get(govIndex);
+                    String depWord = indexToWord.get(depIndex);
+                    if (!combinedPhrases.containsKey(govIndex)) {
+                        combinedPhrases.put(govIndex, new StringBuilder(govWord));
+                    }
+                    combinedPhrases.get(govIndex).append(" ").append(depWord);
+                }
+            }
+
+            for (StringBuilder phrase : combinedPhrases.values()) {
+                String combined = phrase.toString().trim();
+                if (isValidEntity(sentence, combined)) {
                     combinedMap.put(combined, combined);
                 }
             }
