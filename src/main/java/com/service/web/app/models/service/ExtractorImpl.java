@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -80,81 +81,14 @@ class KnowledgeGraphExtractor implements Extractor {
 		// Incluye los de las props por defecto + coref + openie.
 		// OMITIMOS 'parse' para MEJOR RENDIMIENTO, ya que nos basamos en 'depparse'.
 		// Incluimos 'mwt' (Multi-Word Tokenizer), importante para español.
-		props.setProperty("annotators", "tokenize,ssplit,mwt,pos,lemma,depparse,ner,coref,kbp,natlog,openie");
+		props.setProperty("annotators", "tokenize,ssplit,mwt,pos,lemma,depparse,ner,kbp,natlog,openie");
 
-		// 2. CONFIGURACIÓN GENERAL Y DE IDIOMA (Algunas pueden estar en el archivo
-		// .properties, pero definirlas aquí asegura consistencia)
-		// props.setProperty("tokenize.language", "es");
-		// props.setProperty("ssplit.boundaryTokenRegex", "[.]|[!?]+|[\\n\\r]+"); //
-		// Separadores de oración
-		// props.setProperty("ssplit.newlineIsSentenceBreak", "always"); // Tratar
-		// saltos de línea como fin de oración
-		// (útil en discursos)
-
-		// 3. CONFIGURACIÓN DE ANOTADORES ESPECÍFICOS (Modelos)
-		// Usar modelos específicos de español y sobrescribir defaults si es necesario
-
-		// MWT (Multi-Word Tokenizer) - Usar el default de español
-		// props.setProperty("mwt.mappingFile",
-		// "edu/stanford/nlp/models/mwt/spanish/spanish-mwt.tsv");
-
-		// POS Tagging - Usar el default UD (Universal Dependencies) de español
-		// props.setProperty("pos.model",
-		// "edu/stanford/nlp/models/pos-tagger/spanish-ud.tagger");
-
-		// Lemmatization - Se basa en POS, no requiere modelo explícito aquí normalmente
-
-		// NER (Named Entity Recognition) - Usar el default Ancora de español
-		// props.setProperty("ner.language", "es"); // Redundante si
-		// tokenize.language=es, pero explícito
-		// props.setProperty("ner.model",
-		// "edu/stanford/nlp/models/ner/spanish.ancora.distsim.s512.crf.ser.gz");
-		// props.setProperty("ner.applyNumericClassifiers", "true"); // Reconocer
-		// números
-		// props.setProperty("ner.useSUTime", "true"); // Reconocer fechas/tiempos con
-		// SUTime
-		// Opcional: Cargar gazetteers adicionales si tienes listas específicas de tu
-		// dominio
-		// props.setProperty("ner.fine.regexner.mapping",
-		// "path/to/your/gazetteer_mapping.tag");
 		props.setProperty("ner.fine.regexner.ignorecase", "true");
-
-		// Dependency Parsing - ***SOBRESCRIBIR*** el default por el modelo PyTorch más
-		// nuevo
-		// props.setProperty("depparse.language", "spanish");
-		// props.setProperty("depparse.model",
-		// "edu/stanford/nlp/models/parser/nndep/UD_Spanish-AnCora_pytorch.pt");
-
-		// Coreference Resolution - Configurar para español
-		// props.setProperty("coref.language", "es");
-		// props.setProperty("coref.algorithm", "neural"); // El más avanzado (puede
-		// requerir descarga de modelo adicional
-		// la primera vez)
-		// Podría ser necesario especificar el modelo si no se descarga automáticamente:
-		// props.setProperty("coref.statistical.model",
-		// "edu/stanford/nlp/models/coref/statistical/es_coref_model.ser.gz"); // Ajusta
-		// la ruta si es necesario
-
-		// KBP (Knowledge Base Population) - Usar configuración basada en reglas por
-		// defecto
-		// props.setProperty("kbp.language", "es");
-		// props.setProperty("kbp.model", "none"); // Asegura que use solo reglas
-		// props.setProperty("kbp.semgrex",
-		// "edu/stanford/nlp/models/kbp/spanish/semgrex");
-		// props.setProperty("kbp.tokensregex",
-		// "edu/stanford/nlp/models/kbp/spanish/tokensregex");
-		// props.setProperty("entitylink.wikidict",
-		// "edu/stanford/nlp/models/kbp/spanish/wikidict_spanish.tsv"); // Para enlazar
-		// a Wikipedia si se usa entitylink
 
 		// OpenIE (Open Information Extraction) - Configurar
 		props.setProperty("openie.resolve_coref", "true"); // Intentar usar coreferencia para mejores triples
 		props.setProperty("openie.ignore_affinity", "false"); // Usar afinidad para filtrar
-		props.setProperty("openie.affinity_probability_cap", "0.9"); // Umbral de confianza
-		// props.setProperty("openie.splitter.model",
-		// "edu/stanford/nlp/models/naturalli/clause_splitter_ud_ancora.ser.gz"); //
-		// Separador de cláusulas para
-		// español UD
+		props.setProperty("openie.affinity_probability_cap", "0.4"); // Umbral de confianza
 
 		// Inicializar la pipeline (puede tardar un poco la primera vez)
 		System.out.println("Inicializando pipeline de CoreNLP con configuración personalizada...");
@@ -187,6 +121,7 @@ class KnowledgeGraphExtractor implements Extractor {
 				System.out.printf("  Documento ID: %s está vacío, saltando.\n", doc.getId());
 				continue;
 			}
+			// - Limpiar Texto ---
 
 			// 3. Dividir el texto del documento en chunks
 			List<String> chunks = splitTextIntoChunks(text);
@@ -214,6 +149,7 @@ class KnowledgeGraphExtractor implements Extractor {
 		List<String> chunks = new ArrayList<>();
 		// Regex mejorada para manejar espacios después de ., !? y saltos de línea
 		String[] sentences = text.split("(?<=[.!?])\\s+|[\n\r]+");
+		System.out.println(sentences.length);
 		StringBuilder currentChunk = new StringBuilder();
 		// Puedes hacer configurable el tamaño del chunk (ej. 10 oraciones)
 		final int CHUNK_SIZE_SENTENCES = 10;
@@ -221,8 +157,9 @@ class KnowledgeGraphExtractor implements Extractor {
 
 		for (String sentence : sentences) {
 			String trimmedSentence = sentence.trim();
+			String cleanedText = trimmedSentence.replaceAll("[\\n\\r]+", " ").trim();
 			if (!trimmedSentence.isEmpty()) {
-				currentChunk.append(trimmedSentence).append(" "); // Añade espacio entre oraciones
+				currentChunk.append(cleanedText).append(" "); // Añade espacio entre oraciones
 				sentenceCount++;
 				if (sentenceCount == CHUNK_SIZE_SENTENCES) {
 					chunks.add(currentChunk.toString().trim());
@@ -234,6 +171,7 @@ class KnowledgeGraphExtractor implements Extractor {
 
 		// Añadir el último chunk si contiene algo
 		if (currentChunk.length() > 0) {
+			String cleanedText = currentChunk.toString().replaceAll("[\\n\\r]+", " ").trim();
 			chunks.add(currentChunk.toString().trim());
 		}
 		return chunks;
@@ -264,8 +202,26 @@ class KnowledgeGraphExtractor implements Extractor {
 		}
 
 		for (CoreMap sentence : sentences) {
+			// Mapa temporal para esta oración: ID original -> ID combinado (por amod)
+			Map<String, String> localWordIdToCombinedId = new HashMap<>();
 
 			// --- Estrategia de Extracción Combinada ---
+
+			// PASO 1: Identificar Nodos Canónicos desde Mentions
+			List<CoreMap> mentions = sentence.get(CoreAnnotations.MentionsAnnotation.class);
+			if (mentions != null) {
+				System.out.println(mentions);
+				for (CoreMap mention : mentions) {
+					String mentionText = mention.get(CoreAnnotations.TextAnnotation.class);
+					String mentionId = normalizeForId(mentionText);
+					if (mentionId == null || mentionId.isBlank())
+						continue;
+					String nerTag = mention.get(CoreAnnotations.NamedEntityTagAnnotation.class);
+					String nodeType = (nerTag != null && (!nerTag.equals("NUMBER") || !nerTag.equals("O"))) ? nerTag
+							: "MENTION";
+					addNode(mentionId, mentionText, nodeType, docId);
+				}
+			}
 
 			// A. Extracción con KBP (Basada en reglas por defecto)
 			// Intenta extraer relaciones si las reglas KBP coinciden
@@ -273,13 +229,13 @@ class KnowledgeGraphExtractor implements Extractor {
 			// tokens
 			// Nota: Esta parte es experimental, KBP basado en reglas puede no dar muchos
 			// resultados generales
-
 			List<RelationTriple> kbpRelations = sentence.get(KBPTriplesAnnotation.class); // Esta clave puede variar
 			if (kbpRelations != null && !kbpRelations.isEmpty()) {
 				System.out.println("KBP Relations found: " + kbpRelations.size()); // Debug
 				System.out.println(kbpRelations);
 				for (RelationTriple triple : kbpRelations) {
-					processTriple(triple.subject, triple.relationLemmaGloss(), triple.object, "KBP", docId);
+					processRelationTriple(triple.subject, triple.relationLemmaGloss(), triple.object, "KBP", docId,
+							localWordIdToCombinedId);
 				}
 			}
 
@@ -290,21 +246,24 @@ class KnowledgeGraphExtractor implements Extractor {
 				for (RelationTriple triple : openieTriples) {
 					System.out.println(triple);
 					// Procesa el triple de OpenIE
-					processTriple(triple.subject, getSpanLemma(triple.relation), triple.object, "OpenIE", docId);
+					String relationLemma = getSpanLemma(triple.relation);
+					processRelationTriple(triple.subject, relationLemma, triple.object, "OpenIE", docId,
+							localWordIdToCombinedId); // Pasar mapa local
 				}
 			}
 
-			// C. Extracción basada en Dependencias (Complementaria y Robusta)
+			// C. Extracción basada en Dependencias (Complementaria y Robusta INCLUYE AMOD
+			// COMBINADO Y PATRONES NUEVOS)
 			SemanticGraph dependencies = sentence
 					.get(SemanticGraphCoreAnnotations.EnhancedPlusPlusDependenciesAnnotation.class);
 			if (dependencies != null) {
-				extractRelationsFromDependencies(dependencies, sentence, docId);
+				extractRelationsFromDependencies(dependencies, docId, localWordIdToCombinedId);
 			} else {
 				System.err.println("Advertencia: No se encontró grafo de dependencias para una oración.");
 			}
 
 			// D. Identificar Conceptos Relevantes (Nodos no NER)
-			extractConcepts(sentence, docId);
+			extractConceptsFallback(sentence, docId);
 		}
 
 	}
@@ -338,125 +297,145 @@ class KnowledgeGraphExtractor implements Extractor {
 	 * Procesa un triple (sujeto, relación, objeto) genérico y lo añade al grafo.
 	 * Usa los spans (listas de CoreLabel) para obtener texto, lemas y tipos.
 	 */
-	private void processTriple(List<CoreLabel> subjectSpan, String relationLemma, List<CoreLabel> objectSpan,
-			String sourceMethod, String docId) {
+	private void processRelationTriple(List<CoreLabel> subjectSpan, String relationLemma, List<CoreLabel> objectSpan,
+			String sourceMethod, String docId, Map<String, String> localWordIdToCombinedId) {
 		if (subjectSpan == null || subjectSpan.isEmpty() || objectSpan == null || objectSpan.isEmpty()
 				|| relationLemma == null || relationLemma.isBlank()) {
 			return; // Ignorar triples incompletos
 		}
 
-		/*
-		 * String subjText =
-		 * subjectSpan.stream().map(CoreLabel::originalText).reduce("", (a, b) -> a +
-		 * " " + b).trim();
-		 * String objText = objectSpan.stream().map(CoreLabel::originalText).reduce("",
-		 * (a, b) -> a + " " + b).trim();
-		 * 
-		 * String subjLemma = getSpanLemma(subjectSpan); // Usar lema como ID
-		 * String objLemma = getSpanLemma(objectSpan);
-		 */ // Usar lema como ID
+		// 1. Resolver spans a IDs (crea nodo si no existe)
+		String subjOriginalId = resolveSpanToNodeId(subjectSpan, docId);
+		String objOriginalId = resolveSpanToNodeId(objectSpan, docId);
 
-		// --- Determinar ID, Nombre y Tipo para Sujeto y Objeto ---
-		NodeInfo subjInfo = getNodeInfoFromSpan(subjectSpan); // Ya no necesita docId aquí
-		NodeInfo objInfo = getNodeInfoFromSpan(objectSpan);
+		if (subjOriginalId == null || objOriginalId == null)
+			return;
 
-		if (subjInfo == null || objInfo == null || subjInfo.id.equals(objInfo.id)) {
-			return; // Evitar relaciones vacías o auto-referencias simples
-		}
+		// 2. Aplicar mapeo local (amod combinado)
+		String subjFinalId = localWordIdToCombinedId.getOrDefault(subjOriginalId, subjOriginalId);
+		String objFinalId = localWordIdToCombinedId.getOrDefault(objOriginalId, objOriginalId);
 
-		// Determinar tipo (priorizando NER sobre Concepto)
-		// String subjType = getNodeTypeFromTokenList(subjectSpan, "Concepto");
-		// String objType = getNodeTypeFromTokenList(objectSpan, "Concepto");
+		if (subjFinalId.equals(objFinalId))
+			return; // Evitar auto-referencias
 
+		// 3. Limpiar/Traducir la relación
 		String finalRelation = relationLemma.toLowerCase().trim();
 		if ("KBP".equals(sourceMethod)) {
 			finalRelation = KBP_RELATION_MAP.getOrDefault(finalRelation, finalRelation);
 		} else {
-			if (finalRelation.equals("ser") || finalRelation.equals("estar")) {
+			if (finalRelation.equals("ser") || finalRelation.equals("estar"))
 				finalRelation = "es";
-			}
-			// Podrías añadir más limpieza aquí si OpenIE da relaciones raras
 		}
 
-		// --- Añadir al grafo ---
-		// Explicación: Nodos se añaden/actualizan primero. Si ya existen, solo se
-		// actualiza
-		// frecuencia y se añade el docId. La arista solo se añade si no existe ya
-		// exactamente igual (mismo origen, destino y relación).
-		addNode(subjInfo.id, subjInfo.name, subjInfo.type, docId);
-		addNode(objInfo.id, objInfo.name, objInfo.type, docId);
-		addEdge(subjInfo.id, objInfo.id, finalRelation); // System.out.printf("[%s] Added Edge: (%s)-[%s]->(%s)\n",
-															// sourceMethod,
-		// subjLemma, relationLemma.toLowerCase().trim(), objLemma); // Debug
+		// 4. Añadir la arista
+		addEdge(subjFinalId, objFinalId, finalRelation);
 	}
 
 	/**
 	 * Extrae ID, nombre y tipo de un span de CoreLabel.
 	 * **CLAVE:** Maneja correctamente entidades NER multi-palabra.
 	 */
-	private NodeInfo getNodeInfoFromSpan(List<CoreLabel> span) {
+	private String resolveSpanToNodeId(List<CoreLabel> span, String docId) {
 		if (span == null || span.isEmpty())
 			return null;
 
-		String fullOriginalText = getSpanOriginalText(span); // Texto completo original
-		String firstNer = span.get(0).ner();
-		String nodeType = "Concepto"; // Tipo por defecto
-		String nodeId = null;
-
-		// 1. Comprobar si es una entidad NER multi-palabra consistente
-		boolean isConsistentNer = false;
-		if (firstNer != null && !firstNer.equals("O")) {
-			isConsistentNer = true;
-			for (int i = 1; i < span.size(); i++) {
-				if (!firstNer.equals(span.get(i).ner())) {
-					isConsistentNer = false;
-					break;
-				}
-			}
-			if (isConsistentNer) {
-				nodeType = firstNer; // Usar el tipo NER detectado (sin mapeo)
-			}
+		String spanText = getSpanOriginalText(span);
+		String normalizedSpanTextId = normalizeForId(spanText);
+		if (normalizedSpanTextId != null && nodes.containsKey(normalizedSpanTextId)) {
+			nodes.get(normalizedSpanTextId).addDocumentId(docId);
+			return normalizedSpanTextId;
 		}
-
-		// 2. Generar ID y determinar Tipo final
-		if (isConsistentNer) {
-			// Es una entidad NER completa (ej: "16 de noviembre de 1996", "FIDEL CASTRO
-			// RUZ")
-			nodeId = normalizeForId(fullOriginalText); // ID basado en el texto completo normalizado
-			// nodeType ya está asignado arriba
-		} else {
-			// No es NER consistente o es un concepto/frase mixta.
-			// Usar lema del último token como ID (o buscar head word si se quiere más
-			// precisión)
-			CoreLabel lastToken = span.get(span.size() - 1);
-			nodeId = normalizeForId(getLemma(lastToken));
-			// Si el último token tenía un NER individual, usarlo, si no, es Concepto.
-			String lastTokenNer = lastToken.ner();
-			if (lastTokenNer != null && !lastTokenNer.equals("O")) {
-				nodeType = lastTokenNer; // Usar NER del último token si existe
-			} else {
-				nodeType = "Concepto"; // Fallback a Concepto
-			}
+		NodeInfo nodeInfo = getNodeInfoFromSpan(span);
+		if (nodeInfo != null) {
+			addNode(nodeInfo.id, nodeInfo.name, nodeInfo.type, docId);
+			return nodeInfo.id;
 		}
+		return null; // nombre
+	}
 
-		if (nodeId == null || nodeId.isBlank()) {
-			// Si no se pudo generar ID (ej. solo signos de puntuación), intentar con el
-			// texto completo
-			nodeId = normalizeForId(fullOriginalText);
-			if (nodeId == null || nodeId.isBlank())
-				return null; // Aún no se pudo
-			nodeType = "Concepto"; // Asignar tipo genérico si usamos texto completo como fallback de ID
+	// resolveWordToNodeId (Sin cambios - crea nodo si no existe)
+	private String resolveWordToNodeId(IndexedWord word, String docId) {
+		if (word == null)
+			return null;
+		String wordText = word.originalText();
+		String normalizedWordTextId = normalizeForId(wordText);
+		String lemma = getLemma(word);
+		String normalizedLemmaId = normalizeForId(lemma);
+		if (normalizedWordTextId != null && nodes.containsKey(normalizedWordTextId)) {
+			nodes.get(normalizedWordTextId).addDocumentId(docId);
+			return normalizedWordTextId;
 		}
-
-		return new NodeInfo(nodeId, fullOriginalText, nodeType); // Siempre devolver el texto original completo como
-																	// nombre
+		if (normalizedLemmaId != null && nodes.containsKey(normalizedLemmaId)) {
+			nodes.get(normalizedLemmaId).addDocumentId(docId);
+			return normalizedLemmaId;
+		}
+		NodeInfo nodeInfo = getNodeInfoFromWord(word);
+		if (nodeInfo != null) {
+			addNode(nodeInfo.id, nodeInfo.name, nodeInfo.type, docId);
+			return nodeInfo.id;
+		}
+		return null;
 	}
 
 	/**
 	 * Extracción complementaria usando patrones sobre el grafo de dependencias.
 	 */
-	private void extractRelationsFromDependencies(SemanticGraph dependencies, CoreMap sentence, String docId) {
-		// Ejemplo: Patrón Sujeto-Verbo-Objeto (nsubj -> VERB -> obj/obl)
+	private void extractRelationsFromDependencies(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
+		// --- PASO 4.1: Detectar y Procesar AMOD para combinar nodos ---
+		processAmodCombinations(dependencies, docId, localWordIdToCombinedId);
+
+		// --- PASO 4.2: Extraer Relaciones SVO (Sujeto-Verbo-Objeto) ---
+		extractSvoRelations(dependencies, docId, localWordIdToCombinedId);
+
+		// --- PASO 4.3: Extraer Relaciones NMOD y APPOS ---
+		extractNmodApposRelations(dependencies, docId, localWordIdToCombinedId);
+
+		// --- PASO 4.4: Extraer Relaciones Cópula+Complemento ---
+		extractCopulaRelations(dependencies, docId, localWordIdToCombinedId);
+
+		// --- PASO 4.5: Extraer Relaciones de Cláusulas Relativas (ACL:RELCL) ---
+		extractRelativeClauseRelations(dependencies, docId, localWordIdToCombinedId);
+
+		// --- Añadir más patrones aquí si es necesario ---
+	}
+
+	// --- NUEVO: Procesar AMOD ---
+	private void processAmodCombinations(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
+		for (SemanticGraphEdge edge : dependencies.findAllRelns(GrammaticalRelation.valueOf("amod"))) {
+			IndexedWord govWord = edge.getGovernor(); // El sustantivo
+			IndexedWord depWord = edge.getDependent(); // El adjetivo
+
+			NodeInfo govInfo = getNodeInfoFromWord(govWord); // Obtener info original
+			NodeInfo depInfo = getNodeInfoFromWord(depWord);
+
+			if (govInfo == null || depInfo == null)
+				continue;
+
+			// Crear texto y ID combinados (ej: "gran parte") - El orden puede depender
+			// Asumimos Adjetivo + Sustantivo para español general, ajustar si es necesario
+			String combinedText = depInfo.name + " " + govInfo.name;
+			String combinedId = normalizeForId(combinedText);
+			if (combinedId == null || combinedId.isBlank())
+				continue;
+
+			// Crear/actualizar el nodo combinado
+			addNode(combinedId, combinedText, govInfo.type, docId); // Usar tipo del sustantivo
+
+			// Registrar el mapeo para esta oración
+			// Mapear tanto el ID original del sustantivo como el del adjetivo al ID
+			// combinado
+			localWordIdToCombinedId.put(govInfo.id, combinedId);
+			localWordIdToCombinedId.put(depInfo.id, combinedId);
+			// System.out.println("AMOD Combined: " + govInfo.id + " + " + depInfo.id + " ->
+			// " + combinedId); // DEBUG
+		}
+	}
+
+	// --- SVO (con negación) ---
+	private void extractSvoRelations(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
 		for (IndexedWord verb : dependencies.getAllNodesByPartOfSpeechPattern("VERB")) {
 			String verbLemma = getLemma(verb);
 			if (verbLemma == null || verbLemma.isBlank())
@@ -468,137 +447,292 @@ class KnowledgeGraphExtractor implements Extractor {
 			else if (relation.equals("haber"))
 				relation = "tiene";
 
-			List<IndexedWord> subjects = new ArrayList<>();
+			boolean isNegated = dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("advmod"))
+					.stream().map(this::getLemma).anyMatch(modLemma -> modLemma != null && modLemma.equals("no"));
+			if (isNegated)
+				relation = "no " + relation;
+
+			Set<IndexedWord> subjects = dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("nsubj"));
+			subjects.addAll(dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("nsubj:pass")));
+
 			List<IndexedWord> objects = new ArrayList<>();
+			objects.addAll(dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("obj")));
+			objects.addAll(dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("iobj")));
+			objects.addAll(dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("obl")));
 
-			// Buscar sujetos (nsubj)
-			dependencies.getParentsWithReln(verb, "nsubj").forEach(subjects::add);
-			// Considerar también sujetos pasivos (nsubj:pass) si es relevante
-			dependencies.getParentsWithReln(verb, "nsubj:pass").forEach(subjects::add);
+			for (IndexedWord subjWord : subjects) {
+				for (IndexedWord objWord : objects) {
+					String subjOriginalId = resolveWordToNodeId(subjWord, docId);
+					String objOriginalId = resolveWordToNodeId(objWord, docId);
+					if (subjOriginalId == null || objOriginalId == null)
+						continue;
 
-			// Buscar objetos (obj, iobj) y complementos oblicuos (obl) que actúan como
-			// objetos semánticos
-			dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("obj")).forEach(objects::add); // Objeto
-																												// directo
-			dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("iobj")).forEach(objects::add); // Objeto
-																												// indirecto
-			dependencies.getChildrenWithReln(verb, GrammaticalRelation.valueOf("obl")).forEach(objects::add); // Oblicuo
+					String subjFinalId = localWordIdToCombinedId.getOrDefault(subjOriginalId, subjOriginalId);
+					String objFinalId = localWordIdToCombinedId.getOrDefault(objOriginalId, objOriginalId);
 
-			// Crear relaciones S-V-O
-			for (IndexedWord subj : subjects) {
-				for (IndexedWord obj : objects) {
-					NodeInfo subjInfo = getNodeInfoFromWord(subj); // No necesita docId aquí
-					NodeInfo objInfo = getNodeInfoFromWord(obj);
-
-					if (subjInfo != null && objInfo != null && !subjInfo.id.equals(objInfo.id)) {
-						addNode(subjInfo.id, subjInfo.name, subjInfo.type, docId); // Pasar docId aquí
-						addNode(objInfo.id, objInfo.name, objInfo.type, docId); // Pasar docId aquí
-						addEdge(subjInfo.id, objInfo.id, relation);
+					if (!subjFinalId.equals(objFinalId)) {
+						addEdge(subjFinalId, objFinalId, relation);
 					}
 				}
 			}
 		}
-		// Ejemplo: Patrón Nominal Modificador (nmod + case) - "presidente de México"
-		for (SemanticGraphEdge edge : dependencies.edgeListSorted()) {
+	}
+
+	// --- NMOD y APPOS ---
+	private void extractNmodApposRelations(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
+		for (SemanticGraphEdge edge : dependencies.edgeIterable()) { // Iterar sobre todas las aristas
 			GrammaticalRelation rel = edge.getRelation();
+			String shortRelName = rel.getShortName();
 
-			if (rel.getShortName().equals("nmod")) {
-				IndexedWord gov = edge.getGovernor(); // Ej: presidente
-				IndexedWord dep = edge.getDependent(); // Ej: México
+			if (shortRelName.equals("nmod") || shortRelName.equals("appos")) {
+				IndexedWord govWord = edge.getGovernor();
+				IndexedWord depWord = edge.getDependent();
 
-				NodeInfo govInfo = getNodeInfoFromWord(gov);
-				NodeInfo depInfo = getNodeInfoFromWord(dep);
-
-				if (govInfo == null || depInfo == null || govInfo.id.equals(depInfo.id))
+				String govOriginalId = resolveWordToNodeId(govWord, docId);
+				String depOriginalId = resolveWordToNodeId(depWord, docId);
+				if (govOriginalId == null || depOriginalId == null)
 					continue;
 
-				String shortRelName = rel.getShortName();
-				String relationLabel = null; // Etiqueta legible final
+				String govFinalId = localWordIdToCombinedId.getOrDefault(govOriginalId, govOriginalId);
+				String depFinalId = localWordIdToCombinedId.getOrDefault(depOriginalId, depOriginalId);
 
-				if (shortRelName.equals("nmod")) { // "presidente de México"
-					relationLabel = dependencies.getChildrenWithReln(dep, GrammaticalRelation.valueOf("case"))
+				if (govFinalId.equals(depFinalId))
+					continue;
+
+				String relationLabel = null;
+				if (shortRelName.equals("nmod")) {
+					relationLabel = dependencies.getChildrenWithReln(depWord, GrammaticalRelation.valueOf("case"))
 							.stream().map(this::getLemma).filter(l -> l != null && !l.isBlank()).findFirst()
-							.orElse("relacionado con"); // Usar preposición o fallback genérico
-				} else if (shortRelName.equals("appos")) { // "AMLO, el presidente"
+							.orElse("relacionado con");
+				} else { // appos
 					relationLabel = "es (descripción)";
-				} else if (shortRelName.equals("amod")) { // "distribución desigual"
-					// Crear nodo para el adjetivo y relación "tiene característica"
-					addNode(govInfo.id, govInfo.name, govInfo.type, docId);
-					addNode(depInfo.id, depInfo.name, depInfo.type, docId); // Añadir adjetivo como nodo
-					addEdge(govInfo.id, depInfo.id, "tiene característica");
-					continue; // Ya se añadió la arista para amod
 				}
-				// Añadir más patrones aquí si se desea (ej. acl para cláusulas relativas)
-				// else if (shortRelName.equals("acl")) { ... }
+				addEdge(govFinalId, depFinalId, relationLabel);
+			}
+		}
+	}
 
-				// Si se encontró una etiqueta legible para nmod o appos, añadir nodos y arista
-				if (relationLabel != null) {
-					addNode(govInfo.id, govInfo.name, govInfo.type, docId);
-					addNode(depInfo.id, depInfo.name, depInfo.type, docId);
-					// La dirección semántica suele ser Gobernador -> Dependiente para nmod y appos
-					addEdge(govInfo.id, depInfo.id, relationLabel);
+	// --- NUEVO: Cópula + Complemento ---
+	private void extractCopulaRelations(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
+		for (SemanticGraphEdge edge : dependencies.findAllRelns(GrammaticalRelation.valueOf("cop"))) {
+			IndexedWord verbWord = edge.getGovernor(); // El verbo cópula (ser, estar)
+			IndexedWord complementWord = edge.getDependent(); // El predicado (adjetivo, sustantivo)
+
+			// Encontrar sujeto del verbo
+			Set<IndexedWord> subjects = dependencies.getChildrenWithReln(verbWord,
+					GrammaticalRelation.valueOf("nsubj"));
+			if (subjects.isEmpty())
+				continue; // Necesita sujeto
+			IndexedWord subjWord = subjects.iterator().next(); // Asumir un sujeto principal
+
+			// Encontrar complementos oblicuos del PREDICADO (complementWord)
+			Set<IndexedWord> obliques = dependencies.getChildrenWithReln(complementWord,
+					GrammaticalRelation.valueOf("obl"));
+
+			// Resolver IDs originales
+			String subjOriginalId = resolveWordToNodeId(subjWord, docId);
+			String complementOriginalId = resolveWordToNodeId(complementWord, docId);
+			if (subjOriginalId == null || complementOriginalId == null)
+				continue;
+
+			// Aplicar mapeo local
+			String subjFinalId = localWordIdToCombinedId.getOrDefault(subjOriginalId, subjOriginalId);
+			String complementFinalId = localWordIdToCombinedId.getOrDefault(complementOriginalId, complementOriginalId); // El
+																															// predicado
+																															// también
+																															// puede
+																															// ser
+																															// combinado
+																															// (ej.
+																															// "buen
+																															// presidente")
+
+			// Detectar negación (puede estar en el verbo o en el complemento)
+			boolean isNegatedVerb = dependencies.getChildrenWithReln(verbWord, GrammaticalRelation.valueOf("advmod"))
+					.stream().map(this::getLemma).anyMatch(modLemma -> modLemma != null && modLemma.equals("no"));
+			boolean isNegatedCompl = dependencies
+					.getChildrenWithReln(complementWord, GrammaticalRelation.valueOf("advmod"))
+					.stream().map(this::getLemma).anyMatch(modLemma -> modLemma != null && modLemma.equals("no"));
+			String negationPrefix = (isNegatedVerb || isNegatedCompl) ? "no " : "";
+
+			// Crear relación básica Sujeto -[es/está]-> Complemento
+			String baseRelation = negationPrefix + getLemma(verbWord); // ej "no ser"
+			if (baseRelation.equals("ser") || baseRelation.equals("estar"))
+				baseRelation = "es"; // Simplificar a "es"
+			else if (baseRelation.equals("no ser") || baseRelation.equals("no estar"))
+				baseRelation = "no es"; // Simplificar negado
+			addEdge(subjFinalId, complementFinalId, baseRelation);
+
+			// Crear relaciones con los complementos oblicuos
+			for (IndexedWord oblWord : obliques) {
+				String oblOriginalId = resolveWordToNodeId(oblWord, docId);
+				if (oblOriginalId == null)
+					continue;
+				String oblFinalId = localWordIdToCombinedId.getOrDefault(oblOriginalId, oblOriginalId);
+
+				if (subjFinalId.equals(oblFinalId))
+					continue; // Evitar auto-relación
+
+				// Obtener preposición
+				String preposition = dependencies.getChildrenWithReln(oblWord, GrammaticalRelation.valueOf("case"))
+						.stream().map(this::getLemma).filter(l -> l != null && !l.isBlank()).findFirst()
+						.orElse("a/de"); // Fallback preposición
+
+				// Crear relación: Sujeto -[relación compuesta]-> Oblicuo
+				// Ej: colonialismo -[no es ajeno a]-> subdesarrollo
+				String complexRelation = String.format("%s%s %s", negationPrefix, getLemma(complementWord), preposition)
+						.trim(); // ej: "no ajeno a"
+				addEdge(subjFinalId, oblFinalId, complexRelation);
+			}
+		}
+	}
+
+	// --- NUEVO: Cláusulas Relativas ---
+	private void extractRelativeClauseRelations(SemanticGraph dependencies, String docId,
+			Map<String, String> localWordIdToCombinedId) {
+		// Buscar relaciones acl:relcl (entidad_modificada <- verbo_relativo)
+		for (SemanticGraphEdge edge : dependencies.findAllRelns(GrammaticalRelation.valueOf("acl:relcl"))) {
+			IndexedWord modifiedEntityWord = edge.getGovernor(); // Ej: pobreza
+			IndexedWord relativeVerbWord = edge.getDependent(); // Ej: sufre
+
+			String modifiedEntityOriginalId = resolveWordToNodeId(modifiedEntityWord, docId);
+			if (modifiedEntityOriginalId == null)
+				continue;
+			String modifiedEntityFinalId = localWordIdToCombinedId.getOrDefault(modifiedEntityOriginalId,
+					modifiedEntityOriginalId);
+
+			String relativeVerbLemma = getLemma(relativeVerbWord);
+			if (relativeVerbLemma == null || relativeVerbLemma.isBlank())
+				continue;
+
+			// Buscar sujeto y objeto DENTRO de la cláusula relativa (dependientes del verbo
+			// relativo)
+			Set<IndexedWord> relSubjects = dependencies.getChildrenWithReln(relativeVerbWord,
+					GrammaticalRelation.valueOf("nsubj"));
+			Set<IndexedWord> relObjects = dependencies.getChildrenWithReln(relativeVerbWord,
+					GrammaticalRelation.valueOf("obj"));
+			relObjects.addAll(dependencies.getChildrenWithReln(relativeVerbWord, GrammaticalRelation.valueOf("obl"))); // Incluir
+																														// oblicuos
+																														// como
+																														// objetos
+																														// semánticos
+
+			// Caso 1: La entidad modificada es el SUJETO semántico del verbo relativo
+			// Ej: "el hombre que canta" -> hombre <- canta (nsubj: que -> canta)
+			// Crear relación: entidad_modificada -[verbo_relativo]-> objeto_relativo
+			if (!relSubjects.isEmpty() && relSubjects.iterator().next().lemma().equals("que")) { // Si el sujeto es
+																									// "que" (refiere a
+																									// la entidad)
+				for (IndexedWord relObjWord : relObjects) {
+					String relObjOriginalId = resolveWordToNodeId(relObjWord, docId);
+					if (relObjOriginalId == null)
+						continue;
+					String relObjFinalId = localWordIdToCombinedId.getOrDefault(relObjOriginalId, relObjOriginalId);
+					if (!modifiedEntityFinalId.equals(relObjFinalId)) {
+						addEdge(modifiedEntityFinalId, relObjFinalId, relativeVerbLemma); // Ej: hombre -[canta]->
+																							// cancion
+					}
 				}
 			}
 
-			/*
-			 * // Buscar la preposición ('case') asociada al modificador
-			 * String preposition = dependencies.getChildrenWithReln(modifier,
-			 * GrammaticalRelation.valueOf("case"))
-			 * .stream()
-			 * .map(this::getLemma)
-			 * .findFirst()
-			 * .orElse(null); // Ej: "de"
-			 * 
-			 * if (preposition != null && !preposition.isBlank()) {
-			 * String headLemma = getLemma(headNoun);
-			 * String modLemma = getLemma(modifier);
-			 * 
-			 * if (headLemma.equals(modLemma))
-			 * continue;
-			 * 
-			 * String headType = getNodeTypeFromIndexedWord(headNoun, "Concepto");
-			 * String modType = getNodeTypeFromIndexedWord(modifier, "Concepto");
-			 * String headText = headNoun.originalText();
-			 * String modText = modifier.originalText();
-			 * 
-			 * addNode(headLemma, headText, headType);
-			 * addNode(modLemma, modText, modType);
-			 * // Relación: head --(preposition)--> modifier (o al revés, según semántica
-			 * // deseada)
-			 * // Usualmente la dirección nmod es MODIFIER -> HEAD, la relación semántica es
-			 * // HEAD -(prep)-> MODIFIER
-			 * addEdge(headLemma, modLemma, preposition);
-			 */
-			// System.out.printf("[DepParse NMOD] Added Edge: (%s)-[%s]->(%s)\n", headLemma,
-			// preposition, modLemma); // Debug
-
-			// Ejemplo: Aposición (appos) - "AMLO, el presidente"
-			/*
-			 * if (rel.equals("appos")) {
-			 * IndexedWord headEntity = edge.getGovernor();
-			 * IndexedWord apposEntity = edge.getDependent();
-			 * String headLemma = getLemma(headEntity);
-			 * String apposLemma = getLemma(apposEntity);
-			 * 
-			 * if (headLemma.equals(apposLemma))
-			 * continue;
-			 * 
-			 * String headType = getNodeTypeFromIndexedWord(headEntity, "Concepto");
-			 * String apposType = getNodeTypeFromIndexedWord(apposEntity, "Concepto");
-			 * String headText = headEntity.originalText();
-			 * String apposText = apposEntity.originalText();
-			 * 
-			 * addNode(headLemma, headText, headType);
-			 * addNode(apposLemma, apposText, apposType);
-			 * // Añadir una relación de equivalencia o atributo
-			 * addEdge(headLemma, apposLemma, "es"); // O "tiene_aposición", "alias", etc.
-			 * // System.out.printf("[DepParse APPOS] Added Edge: (%s)-[%s]->(%s)\n",
-			 * // headLemma, "es", apposLemma); // Debug
-			 */ // }
-
-			// Añadir más patrones aquí (amod para adjetivos, acl para cláusulas relativas,
-			// etc.)
+			// Caso 2: La entidad modificada es el OBJETO semántico del verbo relativo
+			// Ej: "la pobreza que sufre la gente" -> pobreza <- sufre (nsubj: gente ->
+			// sufre, obj: que -> sufre)
+			// Crear relación: sujeto_relativo -[verbo_relativo]-> entidad_modificada
+			// O invertir: entidad_modificada -[es V-ido por]-> sujeto_relativo
+			if (!relObjects.isEmpty() && relObjects.iterator().next().lemma().equals("que")) { // Si el objeto es "que"
+																								// (refiere a la
+																								// entidad)
+				for (IndexedWord relSubjWord : relSubjects) {
+					String relSubjOriginalId = resolveWordToNodeId(relSubjWord, docId);
+					if (relSubjOriginalId == null)
+						continue;
+					String relSubjFinalId = localWordIdToCombinedId.getOrDefault(relSubjOriginalId, relSubjOriginalId);
+					if (!relSubjFinalId.equals(modifiedEntityFinalId)) {
+						// Opción A: Dirección activa
+						// addEdge(relSubjFinalId, modifiedEntityFinalId, relativeVerbLemma); // Ej:
+						// gente -[sufre]-> pobreza
+						// Opción B: Dirección pasiva/descriptiva (puede ser más clara)
+						addEdge(modifiedEntityFinalId, relSubjFinalId, "es " + relativeVerbLemma + " por"); // Ej:
+																											// pobreza
+																											// -[es
+																											// sufrida
+																											// por]->
+																											// gente
+					}
+				}
+			}
 		}
+	}
+
+	// --- IDENTIFICACIÓN DE CONCEPTOS (FALLBACK) ---
+	private void extractConceptsFallback(CoreMap sentence, String docId) {
+		// (Implementación sin cambios)
+		for (CoreLabel token : sentence.get(CoreAnnotations.TokensAnnotation.class)) {
+			String ner = token.ner();
+			String pos = token.tag();
+			boolean isRelevantPOS = pos != null && (pos.startsWith("NOUN") || pos.startsWith("PROPN"));
+			if ((ner == null || ner.equals("O")) && isRelevantPOS) {
+				String conceptLemma = getLemma(token);
+				String conceptId = normalizeForId(conceptLemma);
+				String conceptText = token.word();
+				String normalizedTextId = normalizeForId(conceptText);
+				if (conceptId != null && !conceptId.isBlank() && !nodes.containsKey(conceptId)) {
+					if (normalizedTextId == null || !nodes.containsKey(normalizedTextId)) {
+						addNode(conceptId, conceptText, "Concepto", docId);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Analiza un span para determinar su ID, Nombre y Tipo.
+	 * Prioriza ID de texto completo normalizado para NERs consistentes.
+	 * Usa ID de lema normalizado como fallback.
+	 */
+	private NodeInfo getNodeInfoFromSpan(List<CoreLabel> span) {
+		// (Implementación sin cambios respecto a la versión anterior - parece correcta)
+		if (span == null || span.isEmpty())
+			return null;
+		String fullOriginalText = getSpanOriginalText(span);
+		String firstNer = span.get(0).ner();
+		String nodeType = "Concepto";
+		String nodeId = null;
+		boolean isConsistentNer = false;
+		if (firstNer != null && !firstNer.equals("O")) {
+			isConsistentNer = true;
+			for (int i = 1; i < span.size(); i++) {
+				if (!firstNer.equals(span.get(i).ner())) {
+					isConsistentNer = false;
+					break;
+				}
+			}
+			if (isConsistentNer) {
+				nodeType = firstNer;
+			}
+		}
+		if (isConsistentNer) {
+			nodeId = normalizeForId(fullOriginalText);
+		} else {
+			CoreLabel lastToken = span.get(span.size() - 1);
+			nodeId = normalizeForId(getLemma(lastToken));
+			String lastTokenNer = lastToken.ner();
+			if (lastTokenNer != null && !lastTokenNer.equals("O")) {
+				nodeType = lastTokenNer;
+			} else {
+				nodeType = "Concepto";
+			}
+		}
+		if (nodeId == null || nodeId.isBlank()) {
+			nodeId = normalizeForId(fullOriginalText);
+			if (nodeId == null || nodeId.isBlank())
+				return null;
+			nodeType = "Concepto";
+		}
+		return new NodeInfo(nodeId, fullOriginalText, nodeType);
 	}
 
 	/**

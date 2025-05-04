@@ -3,6 +3,8 @@ package com.service.web.app.models.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
 import com.service.web.app.models.entity.GraphNode;
+import com.service.web.app.models.entity.GraphResult;
+import com.service.web.app.models.entity.Discurs;
 import com.service.web.app.models.entity.GraphEdge;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -12,7 +14,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-@Service
+//@Service
 public class GraphExtractorService implements Extractor {
 
     private final String CORENLP_URL = "http://localhost:9000";
@@ -475,5 +477,11 @@ public class GraphExtractorService implements Extractor {
             }
         }
         return combinedMap;
+    }
+
+    @Override
+    public GraphResult extractTriplesFromDocuments(List<Discurs> documents) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'extractTriplesFromDocuments'");
     }
 }

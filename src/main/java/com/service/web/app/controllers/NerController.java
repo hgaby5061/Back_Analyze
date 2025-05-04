@@ -14,7 +14,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.google.gson.Gson;
 import com.service.web.app.models.entity.Document;
+import com.service.web.app.models.entity.GraphResult;
+import com.service.web.app.models.entity.Discurs;
 import com.service.web.app.models.entity.Relations;
 import com.service.web.app.models.service.Extractor;
 import com.service.web.app.models.service.GraphKnow;
@@ -31,27 +34,29 @@ public class NerController {
 	@Autowired
 	private Extractor extract;
 
-	@Autowired
-	private GraphKnow graph;
+	/*
+	 * @Autowired
+	 * private GraphKnow graph;
+	 */
 
 	@PostMapping("/relations")
-	public ResponseEntity<String> extract(@RequestBody List<String> doc) {
+	public ResponseEntity<String> extract(@RequestBody List<Discurs> doc) {
 		// List<Relations> rel = null;
-		String rel = null;
+		GraphResult rel = null;
 		if (doc.size() > 0) {
 			System.out.println(doc.size());
 			// Recibir del front solo los textos de cada disurso
 
-			rel = extract.extractTriples(doc);
+			rel = extract.extractTriplesFromDocuments(doc);
 			if (rel == null) {
-				return ResponseEntity.badRequest().body(rel);
+				return ResponseEntity.badRequest().build();
 			}
 
 			System.out.println("TERMINO RELATIONS");
-			return ResponseEntity.ok(rel);
+			return ResponseEntity.ok(new Gson().toJson(rel));
 		}
 
-		return ResponseEntity.badRequest().body(rel);
+		return ResponseEntity.badRequest().build();
 	}
 
 	@PostMapping("/ner")
@@ -72,7 +77,7 @@ public class NerController {
 	public ResponseEntity<String> graph(@RequestBody List<Document> document) {
 		String entity = null;
 		if (document.size() > 0) {
-			entity = graph.generateGraph(document);
+			// entity = graph.generateGraph(document);
 			if (entity == null) {
 				return ResponseEntity.badRequest().body("Faltan datos");
 			}
