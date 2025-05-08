@@ -59,7 +59,7 @@ public class NerController {
 		return ResponseEntity.badRequest().build();
 	}
 
-	@PostMapping("/ner")
+	/* @PostMapping("/ner")
 	public ResponseEntity<List<Document>> entities(@RequestBody List<Document> document) {
 		List<Document> entity = null;
 		if (document.size() > 0) {
@@ -85,6 +85,6 @@ public class NerController {
 			return ResponseEntity.ok(entity);
 		}
 		return ResponseEntity.badRequest().body("No hay documentos");
-	}
+	} */
 
 }

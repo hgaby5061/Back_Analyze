@@ -5,24 +5,23 @@ import java.time.ZonedDateTime;
 import java.util.Date;
 import java.util.List;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 public class Document {
-	
 	private String name;
 	private String dateCreation;
 	private String text;
-	
-	
 	private List<String> entities;
-	
-	
 	private List<Relations> relations;
-	
-	public Document(List<String> enti, List<Relations> rel) {		
-		this.entities=enti;
-		this.relations=rel;
-	}
+
+	/*
+	 * public Document(String name, ZonedDateTime time,String text,List<String>
+	 * enti) {
+	 * this.name=name;
+	 * this.dateCreation=time;
+	 * this.text=text;
+	 * this.entities=enti;
+	 * //this.relations=rel;
+	 * }
+	 */
 
 	public List<String> getEntities() {
 		return entities;
@@ -31,7 +30,7 @@ public class Document {
 	public void setEntities(List<String> entities) {
 		this.entities = entities;
 	}
-	
+
 	public void setRelations(List<Relations> relations) {
 		this.relations = relations;
 	}

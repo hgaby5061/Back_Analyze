@@ -51,6 +51,10 @@ public class Node {
         return type;
     }
 
+    public void setFrequency(int frequency) {
+        this.frequency = frequency;
+    }
+
     public void incrementFrequency() {
         this.frequency++;
     }

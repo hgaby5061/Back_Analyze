@@ -19,6 +19,18 @@ public class Edge {
         return source;
     }
 
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public void setTarget(String target) {
+        this.target = target;
+    }
+
+    public void setRelationship(String relationship) {
+        this.relationship = relationship;
+    }
+
     public String getTarget() {
         return target;
     }

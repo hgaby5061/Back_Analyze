@@ -12,6 +12,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.springframework.stereotype.Service;
 
@@ -33,6 +34,9 @@ import edu.stanford.nlp.semgraph.SemanticGraphCoreAnnotations;
 import edu.stanford.nlp.semgraph.SemanticGraphEdge;
 import edu.stanford.nlp.trees.GrammaticalRelation;
 import edu.stanford.nlp.util.CoreMap;
+import edu.stanford.nlp.coref.CorefCoreAnnotations;
+import edu.stanford.nlp.coref.data.CorefChain;
+import edu.stanford.nlp.coref.data.CorefChain.CorefMention;
 
 @Service
 class KnowledgeGraphExtractor implements Extractor {
@@ -51,6 +55,7 @@ class KnowledgeGraphExtractor implements Extractor {
 			Map.entry("per:title", "tiene título"),
 			Map.entry("org:country_of_headquarters", "país sede"),
 			Map.entry("per:employee_or_member_of", "miembro de"),
+			Map.entry("org:top_members_employees", "dirigido por"),
 			Map.entry("per:origin", "origen"),
 			Map.entry("org:alternate_names", "alias"),
 			Map.entry("per:alternate_names", "alias"),
@@ -60,6 +65,13 @@ class KnowledgeGraphExtractor implements Extractor {
 			Map.entry("org:parents", "matriz de")
 	// ... añadir más mapeos según se descubran
 	);
+
+	// Mapa de relaciones mejoradas para traducción legible
+	private static final Map<String, String> RELATION_TRANSLATIONS = Map.of(
+			"nsubj", "es sujeto de",
+			"obj", "actúa sobre",
+			"nmod", "asociado a",
+			"acl:relcl", "que");
 
 	public KnowledgeGraphExtractor() {
 		// --- Configuración de CoreNLP ---
@@ -81,14 +93,16 @@ class KnowledgeGraphExtractor implements Extractor {
 		// Incluye los de las props por defecto + coref + openie.
 		// OMITIMOS 'parse' para MEJOR RENDIMIENTO, ya que nos basamos en 'depparse'.
 		// Incluimos 'mwt' (Multi-Word Tokenizer), importante para español.
-		props.setProperty("annotators", "tokenize,ssplit,mwt,pos,lemma,depparse,ner,kbp,natlog,openie");
+		props.setProperty("annotators", "tokenize,ssplit,mwt,pos,lemma,depparse,ner,kbp,coref,natlog,openie");
 
 		props.setProperty("ner.fine.regexner.ignorecase", "true");
 
 		// OpenIE (Open Information Extraction) - Configurar
 		props.setProperty("openie.resolve_coref", "true"); // Intentar usar coreferencia para mejores triples
 		props.setProperty("openie.ignore_affinity", "false"); // Usar afinidad para filtrar
-		props.setProperty("openie.affinity_probability_cap", "0.4"); // Umbral de confianza
+		props.setProperty("openie.affinity_probability_cap", "0.6"); // Umbral de confianza
+		props.setProperty("openie.triple.strict", "false");
+		props.setProperty("openie.affinity.threads", "3");
 
 		// Inicializar la pipeline (puede tardar un poco la primera vez)
 		System.out.println("Inicializando pipeline de CoreNLP con configuración personalizada...");
@@ -140,6 +154,9 @@ class KnowledgeGraphExtractor implements Extractor {
 		System.out.println("Calculando importancia de nodos...");
 		calculateNodeImportance();
 
+		cleanIsolatedNodes();
+		mergeSimilarRelations();
+
 		// 6. Devolver el grafo acumulado de todos los documentos
 		System.out.println("Extracción completada.");
 		return new GraphResult(new ArrayList<>(nodes.values()), new ArrayList<>(edges));
@@ -189,10 +206,11 @@ class KnowledgeGraphExtractor implements Extractor {
 			return;
 		}
 
-		// Opcional: Obtener cadenas de correferencia para análisis más profundo si es
-		// necesario
-		// Map<Integer, CorefChain> corefChains =
-		// document.get(CorefCoreAnnotations.CorefChainAnnotation.class);
+		// Habilitar resolución de correferencia
+		Map<Integer, CorefChain> corefChains = document.get(CorefCoreAnnotations.CorefChainAnnotation.class);
+		if (corefChains != null) {
+			processCoreferences(corefChains, docId);
+		}
 
 		// 3. Iterar sobre las oraciones y extraer información
 		List<CoreMap> sentences = document.get(CoreAnnotations.SentencesAnnotation.class);
@@ -508,7 +526,9 @@ class KnowledgeGraphExtractor implements Extractor {
 				} else { // appos
 					relationLabel = "es (descripción)";
 				}
-				addEdge(govFinalId, depFinalId, relationLabel);
+				// Traducir relación a forma legible si está en el mapa
+				String readableRel = RELATION_TRANSLATIONS.getOrDefault(shortRelName, relationLabel);
+				addEdge(govFinalId, depFinalId, readableRel);
 			}
 		}
 	}
@@ -549,12 +569,19 @@ class KnowledgeGraphExtractor implements Extractor {
 																															// "buen
 																															// presidente")
 
-			// Detectar negación (puede estar en el verbo o en el complemento)
-			boolean isNegatedVerb = dependencies.getChildrenWithReln(verbWord, GrammaticalRelation.valueOf("advmod"))
-					.stream().map(this::getLemma).anyMatch(modLemma -> modLemma != null && modLemma.equals("no"));
-			boolean isNegatedCompl = dependencies
-					.getChildrenWithReln(complementWord, GrammaticalRelation.valueOf("advmod"))
-					.stream().map(this::getLemma).anyMatch(modLemma -> modLemma != null && modLemma.equals("no"));
+			// Nueva detección de negación ampliada
+			Set<String> negationWords = Set.of("no", "nunca", "jamás", "tampoco");
+
+			boolean isNegatedVerb = dependencies.getChildrenWithReln(verbWord,
+					GrammaticalRelation.valueOf("advmod"))
+					.stream()
+					.anyMatch(w -> negationWords.contains(w.lemma().toLowerCase()));
+
+			boolean isNegatedCompl = dependencies.getChildrenWithReln(complementWord,
+					GrammaticalRelation.valueOf("advmod"))
+					.stream()
+					.anyMatch(w -> negationWords.contains(w.lemma().toLowerCase()));
+
 			String negationPrefix = (isNegatedVerb || isNegatedCompl) ? "no " : "";
 
 			// Crear relación básica Sujeto -[es/está]-> Complemento
@@ -688,6 +715,9 @@ class KnowledgeGraphExtractor implements Extractor {
 		}
 	}
 
+	private static final Set<String> IRRELEVANT_TERMS = Set.of(
+			"se", "hoy", "que", "x", "mu", "xx", "xxv", "su");
+
 	/**
 	 * Analiza un span para determinar su ID, Nombre y Tipo.
 	 * Prioriza ID de texto completo normalizado para NERs consistentes.
@@ -731,6 +761,9 @@ class KnowledgeGraphExtractor implements Extractor {
 			if (nodeId == null || nodeId.isBlank())
 				return null;
 			nodeType = "Concepto";
+		}
+		if (IRRELEVANT_TERMS.contains(nodeId) || nodeId.matches("\\d+")) {
+			return null;
 		}
 		return new NodeInfo(nodeId, fullOriginalText, nodeType);
 	}
@@ -793,15 +826,35 @@ class KnowledgeGraphExtractor implements Extractor {
 
 	// --- Métodos Auxiliares (Gestión de Nodos/Aristas, Normalización, Tipos) ---
 
+	// Lista de stopwords en español para filtrar nodos irrelevantes
+	private static final Set<String> SPANISH_STOPWORDS = Set.of(
+			"el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al", "lo",
+			"y", "e", "o", "u", "que", "cual", "cuyo", "donde", "como", "cuando", "a", "en",
+			"con", "por", "para", "sin", "sobre", "entre", "hacia", "desde", "se", "sus",
+			"tu", "tus", "mi", "mis", "nos", "vos", "su", "aquél", "ésa", "esto", "eso", "aquello");
+
 	/**
 	 * Añade o actualiza un nodo en el mapa 'nodes'.
+	 * Gestiona entidades anidadas: si el nodo es contenido en otro, actualiza el
+	 * nodo padre.
 	 * Usa el ID (lema) para la unicidad. Incrementa frecuencia.
 	 * Prioriza tipos NER sobre 'Concepto'. Actualiza el nombre si el nuevo es más
 	 * largo.
 	 */
 	private void addNode(String id, String nodeName, String nodeType, String docId) {
-		if (id == null || id.isBlank())
+		if (shouldSkipNode(id, nodeType))
 			return;
+
+		// Buscar entidades contenedoras
+		String parentId = findParentEntity(id);
+		if (parentId != null) {
+			nodes.compute(parentId, (key, parent) -> {
+				parent.addDocumentId(docId);
+				parent.incrementFrequency();
+				return parent;
+			});
+			return;
+		}
 
 		nodes.compute(id, (key, existingNode) -> {
 			if (existingNode == null) {
@@ -824,6 +877,24 @@ class KnowledgeGraphExtractor implements Extractor {
 				return existingNode;
 			}
 		});
+	}
+
+	private boolean shouldSkipNode(String id, String type) {
+		if (id == null || id.isBlank() || SPANISH_STOPWORDS.contains(id)) {
+			return true;
+		}
+		if ("NUMBER".equals(type)) {
+			// Permitir números que tengan exactamente 4 dígitos (posibles años)
+			return !(id.matches("\\d{4}"));
+		}
+		return false;
+	}
+
+	private String findParentEntity(String candidateId) {
+		return nodes.keySet().stream()
+				.filter(existingId -> existingId.contains(candidateId) || candidateId.contains(existingId))
+				.max(java.util.Comparator.comparingInt(String::length))
+				.orElse(null);
 	}
 
 	/**
@@ -931,6 +1002,63 @@ class KnowledgeGraphExtractor implements Extractor {
 	public String extractTriples(List<String> doc) {
 		// TODO Auto-generated method stub
 		throw new UnsupportedOperationException("Unimplemented method 'extractTriples'");
+	}
+
+	private void processCoreferences(Map<Integer, CorefChain> corefChains, String docId) {
+		corefChains.values().forEach(chain -> {
+			List<CorefMention> mentions = chain.getMentionsInTextualOrder();
+			if (mentions.size() > 1) {
+				String representative = normalizeForId(mentions.get(0).mentionSpan);
+				mentions.stream().skip(1)
+						.map(m -> normalizeForId(m.mentionSpan))
+						.filter(id -> nodes.containsKey(id))
+						.forEach(id -> mergeNodes(representative, id));
+			}
+		});
+	}
+
+	private void mergeNodes(String mainId, String synonymId) {
+		Node main = nodes.get(mainId);
+		Node synonym = nodes.get(synonymId);
+
+		if (main != null && synonym != null) {
+			// Fusionar documentos y frecuencia
+			main.getDocumentIds().addAll(synonym.getDocumentIds());
+			main.setFrequency(main.getFrequency() + synonym.getFrequency());
+
+			// Redirigir aristas
+			edges.forEach(e -> {
+				if (e.getSource().equals(synonymId))
+					e.setSource(mainId);
+				if (e.getTarget().equals(synonymId))
+					e.setTarget(mainId);
+			});
+
+			nodes.remove(synonymId);
+		}
+	}
+
+	private void cleanIsolatedNodes() {
+		Set<String> connectedNodes = edges.stream()
+				.flatMap(e -> Stream.of(e.getSource(), e.getTarget()))
+				.collect(Collectors.toSet());
+
+		nodes.entrySet().removeIf(entry -> !connectedNodes.contains(entry.getKey()) &&
+				entry.getValue().getFrequency() < 2);
+	}
+
+	private void mergeSimilarRelations() {
+		Map<String, Edge> relationMap = new HashMap<>();
+		new ArrayList<>(edges).forEach(e -> {
+			String key = e.getSource() + "-" + e.getTarget();
+			Edge existing = relationMap.get(key);
+			if (existing != null) {
+				existing.setRelationship(existing.getRelationship() + "|" + e.getRelationship());
+				edges.remove(e);
+			} else {
+				relationMap.put(key, e);
+			}
+		});
 	}
 
 }
